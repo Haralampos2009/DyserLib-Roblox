@@ -1,4 +1,4 @@
--- ██████╗ ██╗   ██╗███████╗███████╗██████╗
+з-- ██████╗ ██╗   ██╗███████╗███████╗██████╗
 -- ██╔══██╗╚██╗ ██╔╝██╔════╝██╔════╝██╔══██╗
 -- ██║  ██║ ╚████╔╝ ███████╗█████╗  ██████╔╝
 -- ██║  ██║  ╚██╔╝  ╚════██║██╔══╝  ██╔══██╗
@@ -111,6 +111,9 @@ for _, t in ipairs(TOP_TABS) do Nav.topToSide[t.name] = t.side end
 -- таблица изолированных боковых панелей для вкладок добавленных через API
 -- объявляем здесь чтобы selectTop мог её видеть (она заполняется позже через AddTopTab)
 local apiSidePanels = {}
+
+-- forward-объявления GUI-фреймов — создаются позже, но нужны в selectTop/selectSide выше
+local sidePanel, leftPane, contentZone, body
 
 -- (Nav.selectedTop/Nav.selectedSide/Nav.selectedRight/Nav.sideBottomBtn now live in Nav table above)
 local isMin = false -- forward declared; real minimize logic sets this below
@@ -457,13 +460,13 @@ local function selectTop(btn,name)
     -- скрываем все API-панели (они принадлежат вкладкам добавленным через AddTopTab)
     if apiSidePanels then
         for _, data in pairs(apiSidePanels) do
-            data.panel.Visible    = false
-            data.leftPane.Visible = false
+            if data.panel and data.panel.Parent then data.panel.Visible = false end
+            if data.leftPane and data.leftPane.Parent then data.leftPane.Visible = false end
         end
     end
     -- показываем системную боковую панель и leftPane
-    sidePanel.Visible = true
-    leftPane.Visible  = true
+    if sidePanel and sidePanel.Parent then sidePanel.Visible = true end
+    if leftPane and leftPane.Parent then leftPane.Visible = true end
     local allowed=Nav.topToSide[name] or {}
     local allowSet={}; for _,n in ipairs(allowed) do allowSet[n]=true end
     for _,e in ipairs(Nav.sideButtons) do
@@ -843,12 +846,12 @@ local closeBtn=label(topBar,"TextButton",{AnchorPoint=Vector2.new(1,0),Position=
 corner(closeBtn,4); stroke(closeBtn,COLORS.lineLight,1,.15); bindCursorHover(closeBtn)
 
 -- ── BODY ──
-local body=Instance.new("Frame",window)
+body=Instance.new("Frame",window)
 body.Name="Body"; body.Position=UDim2.fromOffset(0,SIZES.topBar)
 body.Size=UDim2.new(1,0,1,-SIZES.topBar); body.BorderSizePixel=0
 Track.WindowBG(body)
 
-local sidePanel=Instance.new("ScrollingFrame",body)
+sidePanel=Instance.new("ScrollingFrame",body)
 sidePanel.Name="Side"; sidePanel.Size=UDim2.new(0,SIZES.sideW,1,0)
 sidePanel.BorderSizePixel=0
 sidePanel.ScrollingDirection=Enum.ScrollingDirection.Y
@@ -936,12 +939,12 @@ pad(prevTab,9); local prevArrow=tinyArrow(prevTab)
 local subDiv=Instance.new("Frame",subTabBar); subDiv.Position=UDim2.fromOffset(408,0)
 subDiv.Size=UDim2.fromOffset(1,22); subDiv.BackgroundColor3=COLORS.line; subDiv.BorderSizePixel=0
 
-local contentZone=Instance.new("Frame",mainZone)
+contentZone=Instance.new("Frame",mainZone)
 contentZone.Name="Content"; contentZone.Position=UDim2.fromOffset(0,22)
 contentZone.Size=UDim2.new(1,0,1,-22); contentZone.BorderSizePixel=0
 Track.WindowBG(contentZone)
 
-local leftPane=Instance.new("Frame",contentZone)
+leftPane=Instance.new("Frame",contentZone)
 leftPane.Name="LeftPane"; leftPane.Size=UDim2.new(0,408,1,0)
 leftPane.BorderSizePixel=0; leftPane.ClipsDescendants=true
 Track.WindowBG(leftPane)
