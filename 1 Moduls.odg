@@ -108,6 +108,10 @@ local isUIBubbles = true
 local Nav = {sideButtons={}, tabPages={}, topTabBtns={}, rightTabBtns={}, rightTabPgs={}, topToSide={}, selectedTop=nil, selectedSide=nil, selectedRight=nil, sideBottomBtn=nil}
 for _, t in ipairs(TOP_TABS) do Nav.topToSide[t.name] = t.side end
 
+-- таблица изолированных боковых панелей для вкладок добавленных через API
+-- объявляем здесь чтобы selectTop мог её видеть (она заполняется позже через AddTopTab)
+local apiSidePanels = {}
+
 -- (Nav.selectedTop/Nav.selectedSide/Nav.selectedRight/Nav.sideBottomBtn now live in Nav table above)
 local isMin = false -- forward declared; real minimize logic sets this below
 local fullSize = nil -- forward declared; set to window.Size once minimize logic initializes below
@@ -450,6 +454,16 @@ local function selectTop(btn,name)
     for _,e in ipairs(Nav.topTabBtns) do
         if e.button==btn and e.label then e.label.TextColor3=COLORS.white end
     end
+    -- скрываем все API-панели (они принадлежат вкладкам добавленным через AddTopTab)
+    if apiSidePanels then
+        for _, data in pairs(apiSidePanels) do
+            data.panel.Visible    = false
+            data.leftPane.Visible = false
+        end
+    end
+    -- показываем системную боковую панель и leftPane
+    sidePanel.Visible = true
+    leftPane.Visible  = true
     local allowed=Nav.topToSide[name] or {}
     local allowSet={}; for _,n in ipairs(allowed) do allowSet[n]=true end
     for _,e in ipairs(Nav.sideButtons) do
@@ -2544,7 +2558,10 @@ end)
 --   Dyser:AddLog("Hello!", Color3.fromRGB(70,230,120))
 --   Dyser:SetAccent(Color3.fromRGB(255,100,0))
 
--- ── Вспомогательная функция: создаёт новую верхнюю вкладку и регистрирует её в навигации
+-- ── Вспомогательная функция: создаёт новую верхнюю вкладку с ОТДЕЛЬНОЙ боковой панелью
+-- Каждая верхняя вкладка через API получает свою собственную боковую панель (изолированно
+-- от системных вкладок Main/Profiles/Theme и друг от друга).
+
 local function createTopTabBtn(name)
     local btn = label(topTabsFrame, "TextButton", {
         Size      = UDim2.fromOffset(56, 22),
@@ -2571,58 +2588,142 @@ local function createTopTabBtn(name)
         TweenService:Create(sc, TweenInfo.new(.15), {Scale=1}):Play()
         if btn ~= Nav.selectedTop then TweenService:Create(btn, TweenInfo.new(.15), {BackgroundColor3=Color3.fromRGB(8,8,9)}):Play() end
     end)
-    table.insert(Nav.topTabBtns, {button=btn, label=lbl2, name=name})
+
+    -- Создаём отдельную боковую панель для этой верхней вкладки
+    -- она живёт поверх системного sidePanel и показывается только когда активна эта вкладка
+    local apiPanel = Instance.new("ScrollingFrame", body)
+    apiPanel.Name = name.."_SidePanel"
+    apiPanel.Size = UDim2.new(0, SIZES.sideW, 1, 0)
+    apiPanel.BorderSizePixel = 0
+    apiPanel.ScrollingDirection = Enum.ScrollingDirection.Y
+    apiPanel.ScrollBarThickness = 3
+    apiPanel.CanvasSize = UDim2.fromOffset(0,0)
+    apiPanel.AutomaticCanvasSize = Enum.AutomaticSize.Y
+    apiPanel.Visible = false
+    apiPanel.ZIndex = 6
+    Track.Scrollbar(apiPanel)
+    Track.PanelBG(apiPanel)
+    pad(apiPanel, 5, 5, 8, 0)
+    local apiLL = Instance.new("UIListLayout", apiPanel)
+    apiLL.Padding = UDim.new(0, 6); apiLL.SortOrder = Enum.SortOrder.LayoutOrder
+
+    -- Отдельный leftPane (контейнер страниц) для этой верхней вкладки
+    local apiLeftPane = Instance.new("Frame", contentZone)
+    apiLeftPane.Name = name.."_LeftPane"
+    apiLeftPane.Size = UDim2.new(0, 408, 1, 0)
+    apiLeftPane.BorderSizePixel = 0
+    apiLeftPane.ClipsDescendants = true
+    apiLeftPane.Visible = false
+    Track.WindowBG(apiLeftPane)
+
+    apiSidePanels[name] = {
+        panel = apiPanel,
+        leftPane = apiLeftPane,
+        sideButtons = {},
+        selectedSide = nil,
+    }
+
     Nav.topToSide[name] = {}
-    btn.MouseButton1Click:Connect(function() playsfx("click"); selectTop(btn, name) end)
+    table.insert(Nav.topTabBtns, {button=btn, label=lbl2, name=name})
+
+    btn.MouseButton1Click:Connect(function()
+        playsfx("click")
+        -- скрываем системную боковую панель и все API-панели
+        sidePanel.Visible = false
+        leftPane.Visible  = false
+        for n, data in pairs(apiSidePanels) do
+            data.panel.Visible    = false
+            data.leftPane.Visible = false
+        end
+        -- показываем свою
+        apiPanel.Visible    = true
+        apiLeftPane.Visible = true
+        -- подсвечиваем верхнюю кнопку
+        for _, e in ipairs(Nav.topTabBtns) do
+            e.button.BackgroundColor3 = Color3.fromRGB(8,8,9)
+            if e.label then e.label.TextColor3 = COLORS.text end
+        end
+        Nav.selectedTop = btn
+        btn.BackgroundColor3 = COLORS.accent
+        lbl2.TextColor3 = COLORS.white
+        -- скрываем системный bottomBtn (он только для "Main")
+        if Nav.sideBottomBtn then Nav.sideBottomBtn.Visible = false end
+        -- активируем первую боковую кнопку этой вкладки
+        local data = apiSidePanels[name]
+        if data and data.sideButtons[1] then
+            local first = data.sideButtons[1]
+            first.btn.BackgroundColor3 = COLORS.accent
+            if data.selectedSide then data.selectedSide.Visible = false end
+            first.page.Visible = true
+            data.selectedSide = first.page
+            settingsPage = first.page
+        end
+    end)
+
     return btn
 end
 
--- ── Вспомогательная функция: создаёт боковую вкладку внутри верхней
+-- ── Создаёт боковую вкладку внутри конкретной верхней вкладки (изолированно)
 local function createSideTabEntry(topName, sideName)
-    local btn = label(sidePanel, "TextButton", {
-        Size = UDim2.new(1,0,0,SIZES.rowH),
+    local data = apiSidePanels[topName]
+    if not data then return Instance.new("ScrollingFrame") end
+
+    local btn = label(data.panel, "TextButton", {
+        Size = UDim2.new(1, 0, 0, SIZES.rowH),
         BackgroundColor3 = Color3.fromRGB(17,17,18),
         Text = "", Font = Enum.Font.Gotham,
-        AutoButtonColor = false, TextColor3 = COLORS.white, Visible = false,
+        AutoButtonColor = false, TextColor3 = COLORS.white,
     })
     corner(btn, 4)
-    local inactiveStroke = stroke(btn, COLORS.lineLight, 1, .2)
-    local activeStroke   = stroke(btn, COLORS.accent, 1, 0); activeStroke.Transparency = 1
+    stroke(btn, COLORS.lineLight, 1, .2)
+    local activeStroke = stroke(btn, COLORS.accent, 1, 0); activeStroke.Transparency = 1
     table.insert(Acc.strokes, activeStroke)
     local gr = gradient(btn, Color3.fromRGB(23,23,24), Color3.fromRGB(9,9,10), 90)
-    local fillGrad = Instance.new("UIGradient", btn)
-    fillGrad.Color = ColorSequence.new({ColorSequenceKeypoint.new(0,COLORS.accentDk), ColorSequenceKeypoint.new(1,COLORS.accentDk)})
-    fillGrad.Transparency = NumberSequence.new({NumberSequenceKeypoint.new(0,.3), NumberSequenceKeypoint.new(0.6,.75), NumberSequenceKeypoint.new(1,1)})
-    fillGrad.Rotation = 0; fillGrad.Enabled = false
-    table.insert(Acc.grads, fillGrad)
     bubble(btn, 8, true)
     local lbl3 = label(btn, "TextLabel", {
-        Name = "SideTabText", Size = UDim2.new(1,0,1,0), Text = sideName,
+        Size = UDim2.new(1,0,1,0), Text = sideName,
         TextSize = TSIZES.sideTab, Font = Enum.Font.Gotham,
         TextXAlignment = Enum.TextXAlignment.Center, TextColor3 = COLORS.text,
-        Category = "SideTabs",
     })
     lbl3.TextScaled = true; lbl3.ZIndex = 10; pad(lbl3, 4, 4)
     bindCursorHover(btn)
     local uiSc = Instance.new("UIScale", btn)
-    btn.MouseEnter:Connect(function() TweenService:Create(uiSc,TweenInfo.new(.15),{Scale=1.02}):Play() end)
-    btn.MouseLeave:Connect(function() TweenService:Create(uiSc,TweenInfo.new(.15),{Scale=1}):Play() end)
+    btn.MouseEnter:Connect(function() TweenService:Create(uiSc, TweenInfo.new(.15), {Scale=1.02}):Play() end)
+    btn.MouseLeave:Connect(function() TweenService:Create(uiSc, TweenInfo.new(.15), {Scale=1}):Play() end)
 
-    local page = Instance.new("ScrollingFrame", leftPane)
-    page.Name = sideName.."Page"; page.Size = UDim2.new(1,0,1,0)
-    page.BorderSizePixel = 0; Track.WindowBG(page)
+    -- Страница контента — живёт в отдельном leftPane этой верхней вкладки
+    local page = Instance.new("ScrollingFrame", data.leftPane)
+    page.Name = sideName.."Page"
+    page.Size = UDim2.new(1, 0, 1, 0)
+    page.BorderSizePixel = 0
+    Track.WindowBG(page)
     page.ScrollBarThickness = 3; Track.Scrollbar(page)
     page.CanvasSize = UDim2.fromOffset(0,0); page.AutomaticCanvasSize = Enum.AutomaticSize.Y
     page.Visible = false; pad(page, 6, 2, 2)
-    local pLL = Instance.new("UIListLayout", page); pLL.SortOrder = Enum.SortOrder.LayoutOrder; pLL.Padding = UDim.new(0,0)
+    local pLL = Instance.new("UIListLayout", page)
+    pLL.SortOrder = Enum.SortOrder.LayoutOrder; pLL.Padding = UDim.new(0,0)
 
-    Nav.tabPages[sideName] = page
-    if not Nav.topToSide[topName] then Nav.topToSide[topName] = {} end
-    table.insert(Nav.topToSide[topName], sideName)
-    local entry = {button=btn, gradient=gr, fillGrad=fillGrad, activeStroke=activeStroke, inactiveStroke=inactiveStroke, name=sideName, page=page}
-    table.insert(Nav.sideButtons, entry)
-    regSearch(sideName, sideName, btn)
-    btn.MouseButton1Click:Connect(function() playsfx("click"); selectSide(btn, gr, sideName, page) end)
+    local entry = {btn = btn, page = page, name = sideName}
+    table.insert(data.sideButtons, entry)
+
+    -- если это первая боковая кнопка — показываем её сразу (при активации верхней вкладки)
+    if #data.sideButtons == 1 then
+        btn.BackgroundColor3 = COLORS.accent
+    end
+
+    btn.MouseButton1Click:Connect(function()
+        playsfx("click")
+        -- скрываем все страницы этой верхней вкладки, показываем выбранную
+        for _, e in ipairs(data.sideButtons) do
+            e.btn.BackgroundColor3 = Color3.fromRGB(17,17,18)
+            e.page.Visible = false
+        end
+        btn.BackgroundColor3 = COLORS.accent
+        page.Visible = true
+        data.selectedSide = page
+        settingsPage = page
+    end)
+
     return page
 end
 
