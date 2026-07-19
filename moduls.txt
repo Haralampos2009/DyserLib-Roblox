@@ -1,0 +1,2889 @@
+-- ██████╗ ██╗   ██╗███████╗███████╗██████╗
+-- ██╔══██╗╚██╗ ██╔╝██╔════╝██╔════╝██╔══██╗
+-- ██║  ██║ ╚████╔╝ ███████╗█████╗  ██████╔╝
+-- ██║  ██║  ╚██╔╝  ╚════██║██╔══╝  ██╔══██╗
+-- ██████╔╝   ██║   ███████║███████╗██║  ██║
+-- ╚═════╝    ╚═╝   ╚══════╝╚══════╝╚═╝  ╚═╝
+--             Template / Skeleton
+
+-- ===================== SERVICES =====================
+local Players          = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local HttpService      = game:GetService("HttpService")
+local TweenService     = game:GetService("TweenService")
+local RunService       = game:GetService("RunService")
+local SoundService     = game:GetService("SoundService")
+
+local player    = Players.LocalPlayer
+local playerGui = player:WaitForChild("PlayerGui")
+local scriptConnections = {}
+
+-- everything below runs inside its own function scope so the script
+-- doesn't exceed Luau's 200-local-register limit for a single chunk
+local function __init()
+
+-- ===================== CONFIGURATION =====================
+local MENU_NAME    = "Dyser"
+local TOGGLE_KEY   = Enum.KeyCode.RightShift
+
+-- Top tabs -> side tabs included in them
+local TOP_TABS = {
+    { name = "Main",     side = {} },
+}
+local SIDE_TABS  = {} -- Side tabs removed
+local RIGHT_TABS = { "Info", "Settings", "History", "Themes", "Cursor" }
+
+local COLORS = {
+    windowBg  = Color3.fromRGB(0,   0,   0), -- Dynamic Window Background
+    panel     = Color3.fromRGB(4,   4,   5),
+    panel2    = Color3.fromRGB(12,  12,  13),
+    line      = Color3.fromRGB(30,  30,  32),
+    lineLight = Color3.fromRGB(48,  48,  50),
+   
+    accent    = Color3.fromRGB(70,  230, 120),
+    accentDk  = Color3.fromRGB(40,  140, 80),
+    pink      = Color3.fromRGB(216, 39,  130),
+    text      = Color3.fromRGB(218, 218, 222),
+    muted     = Color3.fromRGB(170, 170, 176),
+    white     = Color3.fromRGB(255, 255, 255),
+    scrollbar = Color3.fromRGB(50,  50,  52),
+}
+
+local SIZES = {
+    topBar    = 30,
+    sideW     = 132,
+    rowH      = 23,
+    sectionH  = 25,
+    sliderH   = 17,
+    toggleBox = 20,
+}
+local FONTS = { default = Enum.Font.Code, bold = Enum.Font.GothamBold }
+local TSIZES = { title=14, tab=11, sideTab=10, label=13, value=14, section=12 }
+local MENU_POS  = { x=0.21, y=0.21 }
+local MENU_SIZE = { x=0.50, y=0.60 }
+local MENU_MIN  = Vector2.new(650, 460)
+local MENU_MAX  = Vector2.new(900, 800)
+local MENU_SCALE = 0.95
+
+-- ===================== SOUND SYSTEM =====================
+local uiSoundGroup = Instance.new("SoundGroup")
+uiSoundGroup.Name = "DyserMenuSounds"
+uiSoundGroup.Volume = 0.5 
+uiSoundGroup.Parent = SoundService
+
+local sfxEnabled = true
+local function mksfx(id, vol, pitch)
+    local ok, s = pcall(function()
+        local snd = Instance.new("Sound")
+        snd.SoundId = "rbxassetid://"..tostring(id)
+        snd.Volume = vol or 3.0 
+        snd.PlaybackSpeed = pitch or 1
+        snd.SoundGroup = uiSoundGroup 
+        snd.Parent = SoundService
+        return snd
+    end)
+    return ok and s or nil
+end
+
+local SFX = {
+    hover     = mksfx(4590662766, 1.0, 2.5),
+    click     = mksfx(4590662766, 3.0, 1.0),
+    toggleOn  = mksfx(4590662766, 2.5, 1.5),
+    toggleOff = mksfx(4590662766, 2.5, 1.1),
+    slider    = mksfx(4590662766, 1.5, 2.0),
+    open      = mksfx(4590662766, 4.0, 0.75),
+}
+
+local function playsfx(key)
+    if not sfxEnabled then return end
+    local s = SFX[key]
+    if s and s.Parent then pcall(function() s:Stop(); s:Play() end) end
+end
+
+-- ===================== STATE =====================
+local Acc = {bgs={},dkBgs={},strokes={},grads={},texts={},texParts={},bubbles={}}
+
+local isUIBubbles = true
+
+local Nav = {sideButtons={}, tabPages={}, topTabBtns={}, rightTabBtns={}, rightTabPgs={}, topToSide={}, selectedTop=nil, selectedSide=nil, selectedRight=nil, sideBottomBtn=nil}
+for _, t in ipairs(TOP_TABS) do Nav.topToSide[t.name] = t.side end
+
+-- таблица изолированных боковых панелей для вкладок добавленных через API
+-- объявляем здесь чтобы selectTop мог её видеть (она заполняется позже через AddTopTab)
+local apiSidePanels = {}
+
+-- forward-объявления GUI-фреймов — создаются позже, но нужны в selectTop/selectSide выше
+local sidePanel, leftPane, contentZone, body
+
+-- (Nav.selectedTop/Nav.selectedSide/Nav.selectedRight/Nav.sideBottomBtn now live in Nav table above)
+local isMin = false -- forward declared; real minimize logic sets this below
+local fullSize = nil -- forward declared; set to window.Size once minimize logic initializes below
+
+local menuState   = { toggles={}, sliders={}, colors={} }
+local toggleSet   = {}
+local sliderSet   = {}
+
+local curSection    = nil
+local settingsPage  = nil
+local waitingBind   = nil
+local keybinds      = {}
+local searchHighlighted = {}
+local historyPage   = nil
+local addHistoryEntry = nil
+
+-- ===================== SCALE AND TEXT COLOR SYSTEM =====================
+local textCaches = {
+    TopTabs = {},
+    SideTabs = {},
+    ActionButtons = {},
+    Buttons = {},
+    Sliders = {},
+    Labels = {},
+    Inputs = {},
+    Palettes = {}
+}
+local dynamicTextElements = {}
+
+local function trackText(category, obj)
+    if obj then table.insert(textCaches[category] or textCaches.Labels, obj) end
+end
+
+local function trackColorText(o)
+    if o then table.insert(dynamicTextElements, o) end
+end
+
+local function updateTextSize(category, size)
+    if not textCaches[category] then return end
+    for _, obj in ipairs(textCaches[category]) do
+        if obj and obj.Parent then
+            obj.TextSize = size
+        end
+    end
+end
+
+local function setTextColor(color)
+    COLORS.text = color
+    for _, o in ipairs(dynamicTextElements) do
+        if o and o.Parent then
+            local isSelected = false
+            
+            for _, btnData in ipairs(Nav.topTabBtns) do
+                if btnData.label == o and btnData.button == Nav.selectedTop then isSelected = true end
+            end
+            for _, btnData in ipairs(Nav.rightTabBtns) do
+                if btnData.label == o and btnData.button == Nav.selectedRight then isSelected = true end
+            end
+            if o.Name == "SideTabText" then
+                for _, btnData in ipairs(Nav.sideButtons) do
+                    if btnData.button == o.Parent and btnData.button == Nav.selectedSide then isSelected = true end
+                end
+            end
+            
+            if not isSelected then
+                o.TextColor3 = color
+            end
+        end
+    end
+end
+
+-- ===================== UTILITIES =====================
+local function scaledC(c,s) return Color3.new(math.clamp(c.R*s,0,1),math.clamp(c.G*s,0,1),math.clamp(c.B*s,0,1)) end
+local function corner(p,r) local c=Instance.new("UICorner"); c.CornerRadius=UDim.new(0,r); c.Parent=p; return c end
+local function stroke(p,col,th,tr)
+    local s=Instance.new("UIStroke"); s.Color=col; s.Thickness=th or 1
+    s.Transparency=tr or 0; s.ApplyStrokeMode=Enum.ApplyStrokeMode.Border; s.Parent=p; return s
+end
+local function gradient(p,a,b,rot)
+    local g=Instance.new("UIGradient"); g.Color=ColorSequence.new(a,b); g.Rotation=rot or 90; g.Parent=p; return g
+end
+local function label(p, cls, props)
+    local category = props.Category
+    props.Category = nil
+    
+    local o=Instance.new(cls)
+    o.BackgroundTransparency=props.BackgroundTransparency or 1
+    o.Text=props.Text or ""; 
+    local isStandardColor = (props.TextColor3 == nil or props.TextColor3 == COLORS.text)
+    o.TextColor3=props.TextColor3 or COLORS.text
+    
+    o.TextSize=props.TextSize or 14; o.Font=props.Font or Enum.Font.Code
+    o.TextXAlignment=props.TextXAlignment or Enum.TextXAlignment.Left
+    o.TextYAlignment=props.TextYAlignment or Enum.TextYAlignment.Center
+    o.BorderSizePixel=0
+    
+    if cls == "TextLabel" or cls == "TextButton" or cls == "TextBox" then
+        o.TextScaled = false
+    end
+
+    for k,v in pairs(props) do pcall(function() o[k]=v end) end
+    if p then o.Parent=p end
+    
+    if isStandardColor then
+        trackColorText(o)
+    end
+    trackText(category or "Labels", o)
+    
+    return o
+end
+local function pad(p,l,r,t,b)
+    local u=Instance.new("UIPadding",p)
+    if l then u.PaddingLeft=UDim.new(0,l) end; if r then u.PaddingRight=UDim.new(0,r) end
+    if t then u.PaddingTop=UDim.new(0,t) end; if b then u.PaddingBottom=UDim.new(0,b) end
+end
+
+-- ===================== ACCENT AND THEME =====================
+local Elems = {window={}, panel={}, panel2={}, row={}, section={}, windowFrame={}, scrollbar={}}
+local Track = {}
+function Track.BG(o)  table.insert(Acc.bgs,o);   o.BackgroundColor3=COLORS.accent; return o end
+function Track.DkBG(o) table.insert(Acc.dkBgs,o); o.BackgroundColor3=COLORS.accentDk; return o end
+function Track.Stroke(s) table.insert(Acc.strokes,s); s.Color=COLORS.accent; return s end
+function Track.Grad(g)   table.insert(Acc.grads,g); g.Color=ColorSequence.new(COLORS.accentDk,COLORS.accent); return g end
+function Track.TextElement(o)   table.insert(Acc.texts,o);  o.TextColor3=COLORS.accent; return o end
+
+function Track.WindowBG(o)
+    table.insert(Elems.window, o)
+    o.BackgroundColor3 = COLORS.windowBg
+    return o
+end
+
+function Track.PanelBG(o)
+    table.insert(Elems.panel, o)
+    o.BackgroundColor3 = COLORS.panel
+    return o
+end
+
+function Track.Panel2BG(o)
+    table.insert(Elems.panel2, o)
+    o.BackgroundColor3 = COLORS.panel2
+    return o
+end
+
+
+function Track.Scrollbar(o)
+    table.insert(Elems.scrollbar, o)
+    o.ScrollBarImageColor3 = COLORS.scrollbar
+    return o
+end
+
+local function setScrollbarColor(color)
+    COLORS.scrollbar = color
+    for _, o in ipairs(Elems.scrollbar) do
+        if o and o.Parent then o.ScrollBarImageColor3 = color end
+    end
+end
+
+local function setAccent(color)
+    COLORS.accent  = color
+    COLORS.accentDk= scaledC(color,0.55)
+    for _,o in ipairs(Acc.bgs)    do if o.Parent then o.BackgroundColor3=COLORS.accent end end
+    for _,o in ipairs(Acc.dkBgs)  do if o.Parent then o.BackgroundColor3=COLORS.accentDk end end
+    for _,s in ipairs(Acc.strokes)do if s.Parent then s.Color=COLORS.accent end end
+    for _,g in ipairs(Acc.grads)  do if g.Parent then g.Color=ColorSequence.new(COLORS.accentDk,COLORS.accent) end end
+    for _,o in ipairs(Acc.texts)  do if o.Parent then o.TextColor3=COLORS.accent end end
+    
+    if Nav.selectedTop and Nav.selectedTop.Parent then Nav.selectedTop.BackgroundColor3=COLORS.accent end
+    if Nav.selectedSide and Nav.selectedSide.Parent then
+        Nav.selectedSide.BackgroundColor3=COLORS.accent
+        for _,e in ipairs(Nav.sideButtons) do
+            if e.button==Nav.selectedSide then
+                if e.gradient then e.gradient.Enabled=false end
+                if e.fillGrad then e.fillGrad.Enabled=true end
+                break
+            end
+        end
+    end
+    if Nav.selectedRight and Nav.selectedRight.Parent then Nav.selectedRight.BackgroundColor3=COLORS.accent end
+    
+    local tc=scaledC(color,1.7)
+    for _,p in ipairs(Acc.texParts) do
+        if p.f and p.f.Parent then p.f.BackgroundColor3=tc end
+        if p.s and p.s.Parent then p.s.Color=tc end
+    end
+end
+
+local function setWindowBackground(color)
+    COLORS.windowBg = color
+    for _, o in ipairs(Elems.window) do
+        if o and o.Parent then
+            o.BackgroundColor3 = color
+        end
+    end
+end
+
+local function setPanel(color)
+    COLORS.panel = color
+    for _, o in ipairs(Elems.panel) do
+        if o and o.Parent then
+            o.BackgroundColor3 = color
+        end
+    end
+end
+
+local function setPanel2(color)
+    COLORS.panel2 = color
+    for _, o in ipairs(Elems.panel2) do
+        if o and o.Parent then
+            o.BackgroundColor3 = color
+        end
+    end
+end
+
+local function setWindowTransparency(t)
+    for _, o in ipairs(Elems.window) do
+        if o and o.Parent then o.BackgroundTransparency = t end
+    end
+end
+
+local function setPanelTransparency(t)
+    for _, o in ipairs(Elems.panel) do
+        if o and o.Parent then o.BackgroundTransparency = t end
+    end
+end
+
+local function setPanel2Transparency(t)
+    for _, o in ipairs(Elems.panel2) do
+        if o and o.Parent then o.BackgroundTransparency = t end
+    end
+end
+
+local function setRowTransparency(t)
+    for _, o in ipairs(Elems.row) do
+        if o and o.Parent then o.BackgroundTransparency = math.max(0.02, t) end
+    end
+end
+
+local function setSectionTransparency(t)
+    for _, o in ipairs(Elems.section) do
+        if o and o.Parent then o.BackgroundTransparency = t end
+    end
+end
+
+local function setWindowFrameTransparency(t)
+    for _, o in ipairs(Elems.windowFrame) do
+        if o and o.Parent then o.BackgroundTransparency = t end
+    end
+end
+
+-- ===================== BUBBLES =====================
+local bSeed=24680
+local function bubble(parent,count,noCenter,getActive,customColor,onAccent)
+    parent.ClipsDescendants=true
+    local function rnd() bSeed=(bSeed*1103515245+12345)%2147483648; return bSeed/2147483648 end
+    
+    local ic = onAccent and Color3.fromRGB(255,255,255)
+              or customColor and scaledC(customColor,0.55)
+              or scaledC(COLORS.accent,1.7)
+    local transp = onAccent and .55 or customColor and .35 or .55
+    local strokeTranp = onAccent and .7 or customColor and .45 or .25
+    
+    for _=1,(count or 8) do
+        local d=noCenter and (3+math.floor(rnd()*4)) or (4+math.floor(rnd()*7))
+        local py=noCenter and (rnd()<.5 and .04+rnd()*.2 or .76+rnd()*.2) or rnd()
+        local b=Instance.new("Frame",parent)
+        b.AnchorPoint=Vector2.new(.5,.5); b.Position=UDim2.new(rnd(),0,py,0)
+        b.Size=UDim2.fromOffset(d,d); b.BackgroundColor3=ic; b.BackgroundTransparency=transp
+        b.BorderSizePixel=0; b.ZIndex=6; b.Active=false
+        b.Visible=customColor and true or (isUIBubbles and (getActive==nil or getActive()))
+        corner(b,50)
+        local bs=Instance.new("UIStroke",b); bs.Color=ic; bs.Thickness=1; bs.Transparency=strokeTranp
+        
+        if not customColor and not onAccent then
+            table.insert(Acc.texParts,{f=b,s=bs})
+            table.insert(Acc.bubbles,{f=b,ga=getActive})
+        elseif not customColor then
+            table.insert(Acc.bubbles,{f=b,ga=getActive})
+        end
+    end
+end
+local function setBubbles(v)
+    isUIBubbles=v
+    for _,item in ipairs(Acc.bubbles) do
+        if item.f and item.f.Parent then item.f.Visible=v and (item.ga==nil or item.ga()) end
+    end
+end
+
+-- ===================== SEARCH =====================
+local searchElements={}
+local function regSearch(name,tab,elem)
+    table.insert(searchElements,{name=name,tab=tab,elem=elem})
+end
+local function clearHighlight()
+    for _,h in ipairs(searchHighlighted) do
+        if h.row and h.row.Parent then h.row.BackgroundTransparency=h.t; h.row.BackgroundColor3=h.c end
+    end
+    searchHighlighted={}
+end
+local topTab2Label = nil
+
+-- ===================== NAVIGATION =====================
+local function showPage(page)
+    for _,e in ipairs(Nav.sideButtons) do e.page.Visible=false end
+    if page then page.Visible=true end
+end
+
+local function selectSide(btn,grad,name,page)
+    for _,e in ipairs(Nav.sideButtons) do
+        e.gradient.Enabled=true
+        e.button.BackgroundColor3=Color3.fromRGB(17,17,18)
+        if e.fillGrad then e.fillGrad.Enabled=false end
+        if e.activeStroke then e.activeStroke.Transparency=1 end
+        if e.inactiveStroke then e.inactiveStroke.Transparency=.2 end
+        local lbl = e.button:FindFirstChild("SideTabText")
+        if lbl then lbl.TextColor3=COLORS.text end
+    end
+    Nav.selectedSide=btn
+    grad.Enabled=false
+    btn.BackgroundColor3=COLORS.accent
+    for _,e in ipairs(Nav.sideButtons) do
+        if e.button==btn then
+            if e.fillGrad then e.fillGrad.Enabled=true end
+            if e.activeStroke then e.activeStroke.Transparency=0 end
+            if e.inactiveStroke then e.inactiveStroke.Transparency=1 end
+            break
+        end
+    end
+    local actLbl = btn:FindFirstChild("SideTabText")
+    if actLbl then actLbl.TextColor3=COLORS.white end
+    showPage(page)
+end
+
+local function selectTop(btn,name)
+    for _,e in ipairs(Nav.topTabBtns) do
+        e.button.BackgroundColor3=Color3.fromRGB(8,8,9)
+        if e.label then e.label.TextColor3=COLORS.text end
+    end
+    Nav.selectedTop=btn
+    btn.BackgroundColor3=COLORS.accent
+    for _,e in ipairs(Nav.topTabBtns) do
+        if e.button==btn and e.label then e.label.TextColor3=COLORS.white end
+    end
+    -- скрываем все API-панели (они принадлежат вкладкам добавленным через AddTopTab)
+    if apiSidePanels then
+        for _, data in pairs(apiSidePanels) do
+            if data.panel and data.panel.Parent then data.panel.Visible = false end
+            if data.leftPane and data.leftPane.Parent then data.leftPane.Visible = false end
+        end
+    end
+    -- показываем системную боковую панель и leftPane
+    if sidePanel and sidePanel.Parent then sidePanel.Visible = true end
+    if leftPane and leftPane.Parent then leftPane.Visible = true end
+    local allowed=Nav.topToSide[name] or {}
+    local allowSet={}; for _,n in ipairs(allowed) do allowSet[n]=true end
+    for _,e in ipairs(Nav.sideButtons) do
+        e.button.Visible=allowSet[e.name]==true
+    end
+    local first=nil
+    for _,n in ipairs(allowed) do
+        for _,e in ipairs(Nav.sideButtons) do
+            if e.name==n then first=e; break end
+        end
+        if first then break end
+    end
+    if first then selectSide(first.button,first.gradient,first.name,first.page)
+    else showPage(nil) end
+
+    if Nav.sideBottomBtn then
+        Nav.sideBottomBtn.Visible = (name == "Main")
+    end
+end
+
+local function selectRight(btn,name,page)
+    for _,e in ipairs(Nav.rightTabBtns) do
+        e.button.BackgroundColor3=Color3.fromRGB(8,8,9)
+        if e.label then e.label.TextColor3=COLORS.text end
+    end
+    Nav.selectedRight=btn
+    btn.BackgroundColor3=COLORS.accent
+    for _,e in ipairs(Nav.rightTabBtns) do
+        if e.button==btn and e.label then e.label.TextColor3=COLORS.white end
+    end
+    for _,p in pairs(Nav.rightTabPgs) do p.Visible=false end
+    if page then page.Visible=true end
+end
+
+-- ===================== GUI INIT =====================
+local old=playerGui:FindFirstChild("DyserMenu"); if old then old:Destroy() end
+local screenGui=Instance.new("ScreenGui",playerGui)
+screenGui.Name="DyserMenu"; screenGui.IgnoreGuiInset=true
+screenGui.ResetOnSpawn=false; screenGui.ZIndexBehavior=Enum.ZIndexBehavior.Sibling
+screenGui.DisplayOrder=2147483647
+
+-- ===================== LOGS =====================
+local logCont=Instance.new("Frame",screenGui)
+logCont.AnchorPoint=Vector2.new(1,1); logCont.Position=UDim2.new(1,-20,1,-20)
+logCont.Size=UDim2.new(0,250,1,-40); logCont.BackgroundTransparency=1
+local logLL=Instance.new("UIListLayout",logCont)
+logLL.SortOrder=Enum.SortOrder.LayoutOrder; logLL.VerticalAlignment=Enum.VerticalAlignment.Bottom; logLL.Padding=UDim.new(0,8)
+
+local function AddLog(text,col)
+    col=col or COLORS.accent
+    local f=Instance.new("Frame",logCont)
+    f.Size=UDim2.new(1,0,0,30); f.BackgroundColor3=COLORS.panel; f.BackgroundTransparency=1; corner(f,4)
+    local s=stroke(f,col,1,1)
+    local t=label(f,"TextLabel",{Size=UDim2.new(1,-16,1,0),Position=UDim2.fromOffset(8,0),Text=text,TextColor3=COLORS.white,TextSize=12,Font=FONTS.bold,TextTransparency=1})
+    TweenService:Create(f,TweenInfo.new(.3),{BackgroundTransparency=.1}):Play()
+    TweenService:Create(s,TweenInfo.new(.3),{Transparency=0}):Play()
+    TweenService:Create(t,TweenInfo.new(.3),{TextTransparency=0}):Play()
+    task.delay(3.5,function()
+        if not f.Parent then return end
+        local a=TweenService:Create(f,TweenInfo.new(.5),{BackgroundTransparency=1})
+        TweenService:Create(s,TweenInfo.new(.5),{Transparency=1}):Play()
+        TweenService:Create(t,TweenInfo.new(.5),{TextTransparency=1}):Play()
+        a:Play(); a.Completed:Wait(); f:Destroy()
+    end)
+end
+_G._DLog=AddLog
+
+-- ===================== WINDOW =====================
+local window=Instance.new("Frame",screenGui)
+window.Name="MenuWindow"; window.Position=UDim2.new(MENU_POS.x,0,MENU_POS.y,0)
+window.Size=UDim2.new(MENU_SIZE.x,0,MENU_SIZE.y,0); window.BorderSizePixel=0; window.Visible=false
+Track.WindowBG(window)
+table.insert(Elems.windowFrame, window)
+
+-- ===================== CUSTOM CURSOR =====================
+local cur = {}
+
+cur.frame = Instance.new("Frame", screenGui)
+cur.frame.Size = UDim2.fromOffset(1,1)
+cur.frame.BackgroundTransparency = 1
+cur.frame.BorderSizePixel = 0
+cur.frame.ZIndex = 9999
+cur.frame.Visible = false
+cur.frame.Active = false
+
+cur.glow = Instance.new("Frame", cur.frame)
+cur.glow.Size = UDim2.fromOffset(44,44)
+cur.glow.AnchorPoint = Vector2.new(.5,.5)
+cur.glow.Position = UDim2.fromOffset(0,0)
+cur.glow.BackgroundColor3 = COLORS.accent
+cur.glow.BackgroundTransparency = .8
+cur.glow.BorderSizePixel = 0; cur.glow.ZIndex = 9997
+Instance.new("UICorner",cur.glow).CornerRadius = UDim.new(1,0)
+table.insert(Acc.bgs, cur.glow)
+
+cur.ring = Instance.new("Frame", cur.frame)
+cur.ring.Size = UDim2.fromOffset(22,22)
+cur.ring.AnchorPoint = Vector2.new(.5,.5)
+cur.ring.Position = UDim2.fromOffset(0,0)
+cur.ring.BackgroundTransparency = 1
+cur.ring.BorderSizePixel = 0; cur.ring.ZIndex = 9998
+Instance.new("UICorner",cur.ring).CornerRadius = UDim.new(1,0)
+cur.stroke = Instance.new("UIStroke", cur.ring)
+cur.stroke.Thickness = 1.5
+cur.stroke.Color = COLORS.accent
+cur.stroke.Transparency = 0
+table.insert(Acc.strokes, cur.stroke)
+
+cur.dot = Instance.new("Frame", cur.frame)
+cur.dot.Size = UDim2.fromOffset(4,4)
+cur.dot.AnchorPoint = Vector2.new(.5,.5)
+cur.dot.Position = UDim2.fromOffset(0,0)
+cur.dot.BackgroundColor3 = COLORS.accent
+cur.dot.BorderSizePixel = 0; cur.dot.ZIndex = 9999
+Instance.new("UICorner",cur.dot).CornerRadius = UDim.new(1,0)
+table.insert(Acc.bgs, cur.dot)
+
+cur.ch = Instance.new("Frame", cur.frame)
+cur.ch.Size = UDim2.fromOffset(16,2)
+cur.ch.AnchorPoint = Vector2.new(.5,.5)
+cur.ch.Position = UDim2.fromOffset(0,0)
+cur.ch.BackgroundColor3 = COLORS.accent
+cur.ch.BorderSizePixel = 0; cur.ch.ZIndex = 9999
+Instance.new("UICorner",cur.ch).CornerRadius = UDim.new(1,0)
+table.insert(Acc.bgs, cur.ch)
+
+cur.cv = Instance.new("Frame", cur.frame)
+cur.cv.Size = UDim2.fromOffset(2,16)
+cur.cv.AnchorPoint = Vector2.new(.5,.5)
+cur.cv.Position = UDim2.fromOffset(0,0)
+cur.cv.BackgroundColor3 = COLORS.accent
+cur.cv.BorderSizePixel = 0; cur.cv.ZIndex = 9999
+Instance.new("UICorner",cur.cv).CornerRadius = UDim.new(1,0)
+table.insert(Acc.bgs, cur.cv)
+
+cur.inside = false
+cur.enabled = true
+cur.hovering = false
+cur.clickAnim = false
+cur.spinEnabled = false
+cur.spinSpeed = 120
+cur.angle = 0
+cur.rainbow = false
+cur.rainbowHue = 0
+cur.rainbowSpeed = 0.4
+
+local ui = {}
+ui.glowColor = Color3.fromRGB(80,255,140)   -- цвет эффекта открытия/закрытия/сворачивания, настраивается в Themes
+ui.rainbow = false
+ui.rainbowHue = 0
+ui.rainbowSpeed = 0.4
+ui.savedAccentColor = COLORS.accent
+
+local function cursorHover(state)
+    cur.hovering = state
+    if cur.clickAnim then return end
+    if state then
+        TweenService:Create(cur.ring,TweenInfo.new(.15, Enum.EasingStyle.Sine),{Size=UDim2.fromOffset(28,28)}):Play()
+        TweenService:Create(cur.stroke,TweenInfo.new(.15, Enum.EasingStyle.Sine),{Transparency=.5}):Play()
+    else
+        TweenService:Create(cur.ring,TweenInfo.new(.15, Enum.EasingStyle.Sine),{Size=UDim2.fromOffset(22,22)}):Play()
+        TweenService:Create(cur.stroke,TweenInfo.new(.15, Enum.EasingStyle.Sine),{Transparency=0}):Play()
+    end
+end
+
+local function bindCursorHover(obj)
+    obj.MouseEnter:Connect(function() 
+        cursorHover(true)
+        playsfx("hover")
+    end)
+    obj.MouseLeave:Connect(function() 
+        cursorHover(false) 
+    end)
+    if obj:IsA("TextBox") then
+        obj.Focused:Connect(function() 
+            cursorHover(true)
+            playsfx("click")
+        end)
+        obj.FocusLost:Connect(function() cursorHover(false) end)
+    end
+end
+
+local function cursorPulse()
+    if cur.clickAnim then return end
+    cur.clickAnim = true
+    TweenService:Create(cur.ring,TweenInfo.new(.08),{Size=UDim2.fromOffset(30,30)}):Play()
+    TweenService:Create(cur.glow,TweenInfo.new(.08),{BackgroundTransparency=.55}):Play()
+    TweenService:Create(cur.dot, TweenInfo.new(.08),{Size=UDim2.fromOffset(7,7)}):Play()
+    task.delay(.08,function()
+        local targetRingSize = cur.hovering and 28 or 22
+        TweenService:Create(cur.ring,TweenInfo.new(.2,Enum.EasingStyle.Back,Enum.EasingDirection.Out),{Size=UDim2.fromOffset(targetRingSize,targetRingSize)}):Play()
+        TweenService:Create(cur.glow,TweenInfo.new(.2),{BackgroundTransparency=.8}):Play()
+        TweenService:Create(cur.dot, TweenInfo.new(.2,Enum.EasingStyle.Back,Enum.EasingDirection.Out),{Size=UDim2.fromOffset(4,4)}):Play()
+        cur.clickAnim = false
+    end)
+end
+
+table.insert(scriptConnections, RunService.RenderStepped:Connect(function(dt)
+    if UserInputService.TouchEnabled and not UserInputService.MouseEnabled then
+        if cur.inside then
+            cur.inside = false
+            cur.frame.Visible = false
+            UserInputService.MouseIconEnabled = true
+        end
+        return
+    end
+
+    if not cur.enabled then return end
+    if not screenGui.Enabled then
+        if cur.inside then
+            cur.inside = false
+            cur.frame.Visible = false
+            UserInputService.MouseIconEnabled = true
+        end
+        return
+    end
+
+    local ok,mp = pcall(function() return UserInputService:GetMouseLocation() end)
+    if not ok then return end
+    local inset = game:GetService("GuiService"):GetGuiInset()
+    local wx = window.AbsolutePosition.X
+    local wy = window.AbsolutePosition.Y + inset.Y
+    local ww = window.AbsoluteSize.X
+    local wh = window.AbsoluteSize.Y
+    local activeH = isMin and SIZES.topBar or wh
+    
+    local inside = window.Visible and screenGui.Enabled
+        and mp.X >= wx and mp.X <= wx+ww
+        and mp.Y >= wy and mp.Y <= wy+activeH
+
+    if inside then
+        cur.frame.Position = UDim2.fromOffset(mp.X, mp.Y)
+        if not cur.frame.Visible then cur.frame.Visible = true end
+        if not cur.inside then
+            cur.inside = true
+            UserInputService.MouseIconEnabled = false
+        end
+        if cur.spinEnabled then
+            cur.angle = (cur.angle + cur.spinSpeed * dt) % 360
+            cur.ring.Rotation = cur.angle
+            cur.ch.Rotation  = cur.angle
+            cur.cv.Rotation  = cur.angle
+        end
+        if cur.rainbow then
+            cur.rainbowHue = (cur.rainbowHue + dt * cur.rainbowSpeed) % 1
+            local c = Color3.fromHSV(cur.rainbowHue, 1, 1)
+            cur.glow.BackgroundColor3 = c
+            cur.dot.BackgroundColor3  = c
+            cur.ch.BackgroundColor3   = c
+            cur.cv.BackgroundColor3   = c
+            cur.stroke.Color          = c
+        end
+    else
+        if cur.inside then
+            cur.inside = false
+            cur.frame.Visible = false
+            UserInputService.MouseIconEnabled = true
+        end
+    end
+end))
+
+table.insert(scriptConnections, RunService.RenderStepped:Connect(function(dt)
+    if not ui.rainbow then return end
+    ui.rainbowHue = (ui.rainbowHue + dt * ui.rainbowSpeed) % 1
+    setAccent(Color3.fromHSV(ui.rainbowHue, 1, 1))
+end))
+
+local windowStroke = stroke(window,COLORS.accent,1,.35)
+Track.Stroke(windowStroke)
+
+local uiScale = Instance.new("UIScale",window)
+uiScale.Scale = MENU_SCALE
+local szLim = Instance.new("UISizeConstraint",window)
+szLim.MinSize = MENU_MIN; szLim.MaxSize = MENU_MAX
+
+-- reference resolution the menu was designed for; scale grows/shrinks
+-- proportionally to the actual window size relative to this
+local REF_SCREEN = Vector2.new(1920, 1080)
+
+local function autoScaleUI()
+    local screenSize = screenGui.AbsoluteSize
+    if screenSize.X == 0 or screenSize.Y == 0 then return end
+
+    -- proportional scale based on how big the Roblox window currently is
+    local propScale = math.min(screenSize.X / REF_SCREEN.X, screenSize.Y / REF_SCREEN.Y) * MENU_SCALE
+
+    local targetScale = propScale
+    local padding = 40
+
+    -- still shrink further if the window gets too small for the menu's min size
+    if screenSize.X < (MENU_MIN.X + padding) or screenSize.Y < (MENU_MIN.Y + padding) then
+        local scaleX = screenSize.X / (MENU_MIN.X + padding)
+        local scaleY = screenSize.Y / (MENU_MIN.Y + padding)
+        targetScale = math.min(targetScale, math.min(scaleX, scaleY) * MENU_SCALE)
+    end
+
+    uiScale.Scale = math.clamp(targetScale, 0.45, MENU_SCALE)
+end
+screenGui:GetPropertyChangedSignal("AbsoluteSize"):Connect(autoScaleUI)
+task.spawn(autoScaleUI)
+
+local outerL=Instance.new("Frame",window); outerL.Position=UDim2.fromOffset(-2,-2)
+outerL.Size=UDim2.new(1,4,1,4); outerL.BackgroundTransparency=1; outerL.ZIndex=window.ZIndex-1
+stroke(outerL,Color3.fromRGB(16,16,16),2,0)
+
+-- ── TOPBAR ──
+local topBar=Instance.new("Frame",window)
+topBar.Name="TopBar"; topBar.Size=UDim2.new(1,0,0,SIZES.topBar)
+topBar.BorderSizePixel=0
+Track.Panel2BG(topBar)
+
+do
+-- Logo image in the top bar next to the menu name.
+-- Replace the rbxassetid below with your own to use a custom logo.
+local logoImg = Instance.new("ImageLabel", topBar)
+logoImg.Name = "MenuLogo"
+logoImg.Position = UDim2.fromOffset(10, 3)
+logoImg.Size = UDim2.fromOffset(24, 24)
+logoImg.BackgroundTransparency = 1
+logoImg.Image = "rbxassetid://85321985213119"
+
+local dTitle=label(topBar,"TextLabel",{Position=UDim2.fromOffset(40,0),Size=UDim2.fromOffset(96,30),
+    Text=MENU_NAME,TextSize=18,Font=Enum.Font.Michroma,TextColor3=COLORS.accent, TextXAlignment=Enum.TextXAlignment.Left})
+dTitle.TextStrokeTransparency=.5; Track.TextElement(dTitle)
+end
+
+local topTabsFrame=Instance.new("ScrollingFrame",topBar)
+topTabsFrame.Position=UDim2.fromOffset(150,4); topTabsFrame.Size=UDim2.fromOffset(180,22)
+topTabsFrame.BackgroundTransparency=1
+topTabsFrame.BorderSizePixel=0
+topTabsFrame.ScrollingDirection=Enum.ScrollingDirection.X
+topTabsFrame.ScrollBarThickness=3
+Track.Scrollbar(topTabsFrame)
+topTabsFrame.CanvasSize=UDim2.new(0,0,0,0)
+topTabsFrame.AutomaticCanvasSize=Enum.AutomaticSize.X
+local topTabLL=Instance.new("UIListLayout",topTabsFrame)
+topTabLL.FillDirection=Enum.FillDirection.Horizontal; topTabLL.Padding=UDim.new(0,4); topTabLL.SortOrder=Enum.SortOrder.LayoutOrder
+
+for i,t in ipairs(TOP_TABS) do
+    local btn=label(topTabsFrame,"TextButton",{Size=UDim2.fromOffset(66,22),BackgroundTransparency=0,
+        BackgroundColor3=i==1 and COLORS.accent or Color3.fromRGB(8,8,9),Text="",
+        TextSize=TSIZES.tab,Font=FONTS.bold,AutoButtonColor=false})
+    corner(btn,3); stroke(btn,COLORS.lineLight,1,.25); bubble(btn,6,true)
+    local lbl2=label(btn,"TextLabel",{Size=UDim2.new(1,0,1,0),Text=t.name,TextSize=TSIZES.tab,Font=FONTS.bold,
+        TextXAlignment=Enum.TextXAlignment.Center,TextColor3=i==1 and COLORS.white or COLORS.text, Category="TopTabs"})
+    lbl2.ZIndex=10
+    
+    regSearch(t.name, t.name, btn)
+    bindCursorHover(btn)
+    
+    local uiScaleBtn = Instance.new("UIScale", btn)
+    btn.MouseEnter:Connect(function()
+        TweenService:Create(uiScaleBtn,TweenInfo.new(.15),{Scale=1.05}):Play()
+        if btn ~= Nav.selectedTop then
+            TweenService:Create(btn,TweenInfo.new(.15),{BackgroundColor3=Color3.fromRGB(15,15,16)}):Play()
+        end
+    end)
+    btn.MouseLeave:Connect(function()
+        TweenService:Create(uiScaleBtn,TweenInfo.new(.15),{Scale=1}):Play()
+        if btn ~= Nav.selectedTop then
+            TweenService:Create(btn,TweenInfo.new(.15),{BackgroundColor3=Color3.fromRGB(8,8,9)}):Play()
+        end
+    end)
+    
+    table.insert(Nav.topTabBtns,{button=btn,label=lbl2,name=t.name})
+    btn.MouseButton1Click:Connect(function() 
+        playsfx("click")
+        selectTop(btn,t.name) 
+    end)
+end
+
+
+local minimizeBtn=label(topBar,"TextButton",{AnchorPoint=Vector2.new(1,0),Position=UDim2.new(1,-31,0,5), Size=UDim2.fromOffset(20,20),BackgroundTransparency=0,BackgroundColor3=Color3.fromRGB(8,8,9), Text="-",TextSize=20,Font=Enum.Font.GothamBold,AutoButtonColor=false, Category="Buttons"})
+corner(minimizeBtn,4); stroke(minimizeBtn,COLORS.lineLight,1,.15); bindCursorHover(minimizeBtn)
+
+local closeBtn=label(topBar,"TextButton",{AnchorPoint=Vector2.new(1,0),Position=UDim2.new(1,-7,0,5), Size=UDim2.fromOffset(20,20),BackgroundTransparency=0,BackgroundColor3=Color3.fromRGB(8,8,9), Text="x",TextSize=18,Font=Enum.Font.GothamBold,AutoButtonColor=false, Category="Buttons"})
+corner(closeBtn,4); stroke(closeBtn,COLORS.lineLight,1,.15); bindCursorHover(closeBtn)
+
+-- ── BODY ──
+body=Instance.new("Frame",window)
+body.Name="Body"; body.Position=UDim2.fromOffset(0,SIZES.topBar)
+body.Size=UDim2.new(1,0,1,-SIZES.topBar); body.BorderSizePixel=0
+Track.WindowBG(body)
+
+sidePanel=Instance.new("ScrollingFrame",body)
+sidePanel.Name="Side"; sidePanel.Size=UDim2.new(0,SIZES.sideW,1,0)
+sidePanel.BorderSizePixel=0
+sidePanel.ScrollingDirection=Enum.ScrollingDirection.Y
+sidePanel.ScrollBarThickness=3
+Track.Scrollbar(sidePanel)
+sidePanel.CanvasSize=UDim2.new(0,0,0,0)
+sidePanel.AutomaticCanvasSize=Enum.AutomaticSize.Y
+Track.PanelBG(sidePanel)
+pad(sidePanel,5,5,38,0)
+local sideLL=Instance.new("UIListLayout",sidePanel); sideLL.Padding=UDim.new(0,6); sideLL.SortOrder=Enum.SortOrder.LayoutOrder
+
+-- Bottom button in side panel
+Nav.sideBottomBtn=Instance.new("TextButton",body)
+Nav.sideBottomBtn.Name="SideBottomBtn"
+Nav.sideBottomBtn.AnchorPoint=Vector2.new(0,0)
+Nav.sideBottomBtn.Position=UDim2.new(0,5,0,8)
+Nav.sideBottomBtn.Size=UDim2.new(0,SIZES.sideW-10,0,SIZES.rowH)
+Nav.sideBottomBtn.BackgroundColor3=COLORS.accent
+Nav.sideBottomBtn.BorderSizePixel=0
+Nav.sideBottomBtn.Text=""; Nav.sideBottomBtn.AutoButtonColor=false
+corner(Nav.sideBottomBtn,4); Track.BG(Nav.sideBottomBtn); bubble(Nav.sideBottomBtn,8,true,nil,nil,true); bindCursorHover(Nav.sideBottomBtn)
+local sideBottomLbl=label(Nav.sideBottomBtn,"TextLabel",{Size=UDim2.new(1,0,1,0),Text="Main",TextSize=TSIZES.sideTab,Font=FONTS.bold,TextXAlignment=Enum.TextXAlignment.Center, Category="SideTabs"})
+sideBottomLbl.ZIndex=10
+local sbScale=Instance.new("UIScale",Nav.sideBottomBtn)
+Nav.sideBottomBtn.MouseEnter:Connect(function() TweenService:Create(Nav.sideBottomBtn,TweenInfo.new(.12),{BackgroundColor3=scaledC(COLORS.accent,1.15)}):Play(); TweenService:Create(sbScale,TweenInfo.new(.12),{Scale=1.04}):Play() end)
+Nav.sideBottomBtn.MouseLeave:Connect(function() TweenService:Create(Nav.sideBottomBtn,TweenInfo.new(.12),{BackgroundColor3=COLORS.accent}):Play(); TweenService:Create(sbScale,TweenInfo.new(.12),{Scale=1}):Play() end)
+Nav.sideBottomBtn.MouseButton1Click:Connect(function()
+    playsfx("click")
+    TweenService:Create(Nav.sideBottomBtn,TweenInfo.new(.08),{BackgroundColor3=COLORS.accentDk}):Play()
+    task.delay(.08,function() if Nav.sideBottomBtn.Parent then TweenService:Create(Nav.sideBottomBtn,TweenInfo.new(.12),{BackgroundColor3=COLORS.accent}):Play() end end)
+    if addHistoryEntry then addHistoryEntry("🔘 Main", COLORS.accent) end
+end)
+
+local sideDivLine=Instance.new("Frame",body)
+sideDivLine.Position=UDim2.fromOffset(SIZES.sideW,0); sideDivLine.Size=UDim2.new(0,2,1,0)
+sideDivLine.BackgroundColor3=Color3.fromRGB(18,18,19); sideDivLine.BorderSizePixel=0
+
+-- ── SIDE PANEL HOVER EXPAND ──
+-- Плавно расширяет боковую панель при наведении курсора, не двигая
+-- остальной layout (mainZone/divider остаются на месте, панель просто
+-- "наезжает" поверх них благодаря увеличенному ZIndex).
+do
+    local SIDE_EXPANDED_W = SIZES.sideW + 48
+
+    sidePanel.ZIndex = 6
+    Nav.sideBottomBtn.ZIndex = 7
+
+    local sideExpandTween = TweenInfo.new(.22, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+    local sideCollapseTween = TweenInfo.new(.18, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+
+    local function expandSide()
+        TweenService:Create(sidePanel, sideExpandTween, {Size = UDim2.new(0, SIDE_EXPANDED_W, 1, 0)}):Play()
+        TweenService:Create(Nav.sideBottomBtn, sideExpandTween, {Size = UDim2.new(0, SIDE_EXPANDED_W - 10, 0, SIZES.rowH)}):Play()
+    end
+    local function collapseSide()
+        TweenService:Create(sidePanel, sideCollapseTween, {Size = UDim2.new(0, SIZES.sideW, 1, 0)}):Play()
+        TweenService:Create(Nav.sideBottomBtn, sideCollapseTween, {Size = UDim2.new(0, SIZES.sideW - 10, 0, SIZES.rowH)}):Play()
+    end
+
+    sidePanel.MouseEnter:Connect(expandSide)
+    Nav.sideBottomBtn.MouseEnter:Connect(expandSide)
+
+    sidePanel.MouseLeave:Connect(collapseSide)
+    Nav.sideBottomBtn.MouseLeave:Connect(collapseSide)
+end
+
+local mainZone=Instance.new("Frame",body)
+mainZone.Name="Main"; mainZone.Position=UDim2.fromOffset(SIZES.sideW+2,0)
+mainZone.Size=UDim2.new(1,-(SIZES.sideW+2),1,0); mainZone.BorderSizePixel=0
+Track.WindowBG(mainZone)
+
+local subTabBar=Instance.new("Frame",mainZone)
+subTabBar.Size=UDim2.new(1,0,0,22); subTabBar.BorderSizePixel=0
+Track.PanelBG(subTabBar)
+
+local function tinyArrow(parent)
+    local a=label(parent,"TextButton",{AnchorPoint=Vector2.new(1,.5),Position=UDim2.new(1,-5,.5,0), Size=UDim2.fromOffset(14,14),BackgroundTransparency=0,BackgroundColor3=Color3.fromRGB(8,8,9), Text="^",TextSize=10,Font=Enum.Font.GothamBold,AutoButtonColor=false, Category="Buttons"})
+    corner(a,3); stroke(a,COLORS.line,1,.15); bindCursorHover(a); return a
+end
+
+local genTab=label(subTabBar,"TextLabel",{Size=UDim2.new(0,408,1,0),Text="General",TextSize=12, Category="Labels"})
+pad(genTab,9); local genArrow=tinyArrow(genTab)
+local prevTab=label(subTabBar,"TextLabel",{Position=UDim2.fromOffset(408,0),Size=UDim2.new(1,-408,1,0),Text="Preview",TextSize=12, Category="Labels"})
+pad(prevTab,9); local prevArrow=tinyArrow(prevTab)
+local subDiv=Instance.new("Frame",subTabBar); subDiv.Position=UDim2.fromOffset(408,0)
+subDiv.Size=UDim2.fromOffset(1,22); subDiv.BackgroundColor3=COLORS.line; subDiv.BorderSizePixel=0
+
+contentZone=Instance.new("Frame",mainZone)
+contentZone.Name="Content"; contentZone.Position=UDim2.fromOffset(0,22)
+contentZone.Size=UDim2.new(1,0,1,-22); contentZone.BorderSizePixel=0
+Track.WindowBG(contentZone)
+
+leftPane=Instance.new("Frame",contentZone)
+leftPane.Name="LeftPane"; leftPane.Size=UDim2.new(0,408,1,0)
+leftPane.BorderSizePixel=0; leftPane.ClipsDescendants=true
+Track.WindowBG(leftPane)
+
+local leftDivLine=Instance.new("Frame",contentZone)
+leftDivLine.Position=UDim2.fromOffset(408,0); leftDivLine.Size=UDim2.new(0,1,1,0)
+leftDivLine.BackgroundColor3=Color3.fromRGB(20,20,21); leftDivLine.BorderSizePixel=0
+
+for _,name in ipairs(SIDE_TABS) do
+    local btn=label(sidePanel,"TextButton",{Size=UDim2.new(1,0,0,SIZES.rowH), BackgroundColor3=Color3.fromRGB(17,17,18),Text="",Font=Enum.Font.Gotham, AutoButtonColor=false,TextColor3=COLORS.white,Visible=false})
+    corner(btn,4)
+    local inactiveStroke=stroke(btn,COLORS.lineLight,1,.2)
+    local activeStroke=stroke(btn,COLORS.accent,1,0)
+    activeStroke.Transparency=1
+    table.insert(Acc.strokes,activeStroke)
+    local gr=gradient(btn,Color3.fromRGB(23,23,24),Color3.fromRGB(9,9,10),90)
+    local fillGrad=Instance.new("UIGradient",btn)
+    fillGrad.Color=ColorSequence.new({ ColorSequenceKeypoint.new(0, COLORS.accentDk), ColorSequenceKeypoint.new(1, COLORS.accentDk), })
+    fillGrad.Transparency=NumberSequence.new({ NumberSequenceKeypoint.new(0,.3), NumberSequenceKeypoint.new(0.6,.75), NumberSequenceKeypoint.new(1,1), })
+    fillGrad.Rotation=0
+    fillGrad.Enabled=false
+    table.insert(Acc.grads,fillGrad)
+    bubble(btn,8,true)
+    local lbl3=label(btn,"TextLabel",{Name="SideTabText",Size=UDim2.new(1,0,1,0),Text=name,TextSize=TSIZES.sideTab, Font=Enum.Font.Gotham,TextXAlignment=Enum.TextXAlignment.Center,TextColor3=COLORS.text, Category="SideTabs"})
+    lbl3.TextScaled=true; lbl3.ZIndex=10; pad(lbl3,4,4)
+    bindCursorHover(btn)
+    local uiScaleSideBtn = Instance.new("UIScale", btn)
+    btn.MouseEnter:Connect(function() TweenService:Create(uiScaleSideBtn,TweenInfo.new(.15),{Scale=1.02}):Play() end)
+    btn.MouseLeave:Connect(function() TweenService:Create(uiScaleSideBtn,TweenInfo.new(.15),{Scale=1}):Play() end)
+
+    local page=Instance.new("ScrollingFrame",leftPane)
+    page.Name=name.."Page"; page.Size=UDim2.new(1,0,1,0)
+    page.BorderSizePixel=0
+    Track.WindowBG(page)
+    page.ScrollBarThickness=3; Track.Scrollbar(page)
+    page.CanvasSize=UDim2.fromOffset(0,0); page.AutomaticCanvasSize=Enum.AutomaticSize.Y;
+    page.Visible=false
+    pad(page,6,2,2)
+    local pLL=Instance.new("UIListLayout",page); pLL.SortOrder=Enum.SortOrder.LayoutOrder; pLL.Padding=UDim.new(0,0)
+
+    Nav.tabPages[name]=page
+    local entry={button=btn,gradient=gr,fillGrad=fillGrad,activeStroke=activeStroke,inactiveStroke=inactiveStroke,name=name,page=page}
+    table.insert(Nav.sideButtons,entry)
+    regSearch(name,name,btn)
+    btn.MouseButton1Click:Connect(function() 
+        playsfx("click")
+        selectSide(btn,gr,name,page) 
+    end)
+end
+
+-- ===================== RIGHT PANEL =====================
+local rightPane=Instance.new("Frame",contentZone)
+rightPane.Name="RightPane"; rightPane.Position=UDim2.fromOffset(409,0)
+rightPane.Size=UDim2.new(1,-409,1,0); rightPane.BorderSizePixel=0; rightPane.ClipsDescendants=true
+Track.WindowBG(rightPane)
+
+local rightTop=Instance.new("Frame",rightPane)
+rightTop.Size=UDim2.new(1,0,0,50); rightTop.BorderSizePixel=0
+Track.WindowBG(rightTop)
+
+local rTabCont=Instance.new("ScrollingFrame",rightTop)
+rTabCont.Position=UDim2.fromOffset(5,2); rTabCont.Size=UDim2.new(1,-35,0,19); rTabCont.BackgroundTransparency=1
+rTabCont.BorderSizePixel=0
+rTabCont.ScrollingDirection=Enum.ScrollingDirection.X
+rTabCont.ScrollBarThickness=3
+Track.Scrollbar(rTabCont)
+rTabCont.CanvasSize=UDim2.new(0,0,0,0)
+rTabCont.AutomaticCanvasSize=Enum.AutomaticSize.X
+local rTabLL=Instance.new("UIListLayout",rTabCont)
+rTabLL.FillDirection=Enum.FillDirection.Horizontal; rTabLL.Padding=UDim.new(0,4); rTabLL.SortOrder=Enum.SortOrder.LayoutOrder
+
+local searchFrame=Instance.new("Frame",rightTop)
+searchFrame.Position=UDim2.fromOffset(5,24); searchFrame.Size=UDim2.new(1,-10,0,22)
+searchFrame.BackgroundColor3=Color3.fromRGB(8,8,9); searchFrame.BorderSizePixel=0
+corner(searchFrame,4); stroke(searchFrame,COLORS.lineLight,1,.15)
+
+local searchIcon=label(searchFrame,"TextLabel",{Size=UDim2.fromOffset(20,22),Text="🔍",TextSize=11,TextXAlignment=Enum.TextXAlignment.Center, Category="Labels"})
+local searchBox=Instance.new("TextBox",searchFrame)
+searchBox.Size=UDim2.new(1,-46,1,0); searchBox.Position=UDim2.fromOffset(22,0)
+searchBox.BackgroundTransparency=1; searchBox.Text=""; searchBox.PlaceholderText="Search elements..."
+searchBox.PlaceholderColor3=COLORS.muted; searchBox.TextColor3=COLORS.text; searchBox.TextSize=12
+searchBox.Font=Enum.Font.Code; searchBox.ClearTextOnFocus=false
+bindCursorHover(searchBox); trackText("Inputs", searchBox); trackColorText(searchBox)
+
+local clearBtn=label(searchFrame,"TextButton",{AnchorPoint=Vector2.new(1,.5),Position=UDim2.new(1,-3,.5,0), Size=UDim2.fromOffset(20,18),BackgroundColor3=Color3.fromRGB(20,20,22), Text="X",TextSize=11,TextColor3=COLORS.muted,Font=FONTS.bold,AutoButtonColor=false, Category="Buttons"})
+corner(clearBtn,3); stroke(clearBtn,COLORS.line,1,.2); clearBtn.Visible=false; bindCursorHover(clearBtn)
+
+local function doSearch(term)
+    clearHighlight()
+    if term=="" then clearBtn.Visible=false; searchBox.PlaceholderText="Search elements..."; return end
+    clearBtn.Visible=true
+    term=string.lower(term)
+
+    -- split the search term into individual words so "rainbow cursor"
+    -- also matches an element named "Cursor Rainbow" (any word order)
+    local queryWords = {}
+    for w in term:gmatch("%S+") do table.insert(queryWords, w) end
+
+    local found=0; local firstTab=nil
+    for _,e in ipairs(searchElements) do
+        local nameLower = string.lower(e.name)
+        local matches
+        if string.find(nameLower,term,1,true) then
+            -- exact substring match (handles single-word queries / exact phrase)
+            matches = true
+        else
+            -- otherwise require every query word to appear somewhere in the name
+            matches = true
+            for _,w in ipairs(queryWords) do
+                if not string.find(nameLower,w,1,true) then
+                    matches = false
+                    break
+                end
+            end
+        end
+        if matches then
+            found=found+1
+            if e.elem and e.elem.Parent and e.elem:IsA("GuiObject") then
+                local ot,oc=e.elem.BackgroundTransparency,e.elem.BackgroundColor3
+                table.insert(searchHighlighted,{row=e.elem,t=ot,c=oc})
+                e.elem.BackgroundColor3=scaledC(COLORS.accent,.18)
+                e.elem.BackgroundTransparency=0
+            end
+            if not firstTab then firstTab=e.tab end
+        end
+    end
+    searchBox.PlaceholderText=found>0 and found.." found" or "No results"
+    if firstTab then
+        local switchedSide = false
+        for _,e in ipairs(Nav.topTabBtns) do
+            if e.name==firstTab then selectTop(e.button, e.name); switchedSide = true; break end
+        end
+        if not switchedSide then
+            for _,e in ipairs(Nav.sideButtons) do
+                if e.name==firstTab then selectSide(e.button,e.gradient,e.name,e.page); switchedSide = true; break end
+            end
+        end
+        if not switchedSide then
+            for _,e in ipairs(Nav.rightTabBtns) do
+                if e.name==firstTab then selectRight(e.button,e.name,Nav.rightTabPgs[e.name]); break end
+            end
+        end
+    end
+end
+
+searchBox.Changed:Connect(function(p) if p=="Text" then doSearch(searchBox.Text) end end)
+searchBox.FocusLost:Connect(function(enter) if enter then doSearch(searchBox.Text) end end)
+clearBtn.MouseButton1Click:Connect(function() playsfx("click"); searchBox.Text=""; searchBox.PlaceholderText="Search elements..."; clearHighlight(); clearBtn.Visible=false end)
+
+for i,name in ipairs(RIGHT_TABS) do
+    local btn=label(rTabCont,"TextButton",{Size=UDim2.fromOffset(70,19),BackgroundTransparency=0, BackgroundColor3=i==1 and COLORS.accent or Color3.fromRGB(8,8,9),Text="", TextSize=10,Font=FONTS.bold,AutoButtonColor=false})
+    corner(btn,3); stroke(btn,COLORS.lineLight,1,.25); bubble(btn,6,true)
+    local lbl4=label(btn,"TextLabel",{Size=UDim2.new(1,0,1,0),Text=name,TextSize=10,Font=FONTS.bold, TextXAlignment=Enum.TextXAlignment.Center,TextColor3=i==1 and COLORS.white or COLORS.text, Category="TopTabs"})
+    lbl4.ZIndex=10
+    
+    bindCursorHover(btn)
+    local uiScaleRBtn = Instance.new("UIScale", btn)
+    btn.MouseEnter:Connect(function() TweenService:Create(uiScaleRBtn,TweenInfo.new(.15),{Scale=1.05}):Play(); if btn ~= Nav.selectedRight then TweenService:Create(btn,TweenInfo.new(.15),{BackgroundColor3=Color3.fromRGB(15,15,16)}):Play() end end)
+    btn.MouseLeave:Connect(function() TweenService:Create(uiScaleRBtn,TweenInfo.new(.15),{Scale=1}):Play(); if btn ~= Nav.selectedRight then TweenService:Create(btn,TweenInfo.new(.15),{BackgroundColor3=Color3.fromRGB(8,8,9)}):Play() end end)
+    
+    table.insert(Nav.rightTabBtns,{button=btn,label=lbl4,name=name})
+    regSearch(name, name, btn)
+
+    local pg=Instance.new("ScrollingFrame",rightPane)
+    pg.Name=name.."Page"; pg.Position=UDim2.fromOffset(0,50); pg.Size=UDim2.new(1,0,1,-50)
+    pg.BorderSizePixel=0
+    Track.WindowBG(pg)
+    pg.ScrollBarThickness=3; Track.Scrollbar(pg)
+    pg.CanvasSize=UDim2.fromOffset(0,0); pg.AutomaticCanvasSize=Enum.AutomaticSize.Y; pg.Visible=false
+    pad(pg,6,6,6)
+    local pgLL=Instance.new("UIListLayout",pg); pgLL.SortOrder=Enum.SortOrder.LayoutOrder; pgLL.Padding=UDim.new(0,4)
+    Nav.rightTabPgs[name]=pg
+
+    btn.MouseButton1Click:Connect(function() playsfx("click"); selectRight(btn,name,pg) end)
+end
+if Nav.rightTabBtns[1] then selectRight(Nav.rightTabBtns[1].button,Nav.rightTabBtns[1].name,Nav.rightTabPgs[Nav.rightTabBtns[1].name]) end
+
+-- ===================== ACTION HISTORY =====================
+historyPage = Nav.rightTabPgs["History"]
+
+-- ===================== TOOLTIP + SETTINGS =====================
+local tt = {frame = Instance.new("Frame", screenGui)}
+tt.frame.Size = UDim2.fromOffset(10,22); tt.frame.BackgroundColor3 = Color3.fromRGB(10,10,14)
+tt.frame.BackgroundTransparency = 0; tt.frame.BorderSizePixel = 0
+tt.frame.ZIndex = 8888; tt.frame.Visible = false; tt.frame.Active = false
+corner(tt.frame, 4)
+tt.str = Instance.new("UIStroke", tt.frame)
+tt.str.Color = COLORS.accent; tt.str.Thickness = 1; tt.str.Transparency = .35
+table.insert(Acc.strokes, tt.str)
+tt.lbl = Instance.new("TextLabel", tt.frame)
+tt.lbl.Size = UDim2.new(1,-8,1,0); tt.lbl.Position = UDim2.fromOffset(4,0)
+tt.lbl.BackgroundTransparency = 1; tt.lbl.TextSize = 10; tt.lbl.Font = Enum.Font.Code
+tt.lbl.TextColor3 = COLORS.text; tt.lbl.TextXAlignment = Enum.TextXAlignment.Center
+tt.lbl.ZIndex = 8889
+
+tt.delay = nil
+local function hideTT()
+    if tt.delay then task.cancel(tt.delay); tt.delay = nil end
+    tt.frame.Visible = false
+end
+local function addTT(inst, txt)
+    if not inst or not txt or txt == "" then return end
+    inst.MouseEnter:Connect(function()
+        hideTT()
+        tt.delay = task.delay(0.6, function()
+            local ok,mp = pcall(function() return UserInputService:GetMouseLocation() end)
+            if not ok or not inst.Parent then return end
+            tt.lbl.Text = txt
+            local w = math.clamp(#txt * 6 + 20, 60, 200)
+            tt.frame.Size = UDim2.fromOffset(w, 22)
+            tt.frame.Position = UDim2.fromOffset(mp.X - w/2, mp.Y - 34)
+            tt.frame.Visible = true
+            tt.delay = nil
+        end)
+    end)
+    inst.MouseLeave:Connect(hideTT)
+    pcall(function() inst.MouseButton1Down:Connect(hideTT) end)
+end
+
+local settingsP = Nav.rightTabPgs["Settings"]
+do
+    if settingsP then
+        local sH = Instance.new("Frame", settingsP)
+    sH.Size = UDim2.new(1,0,0,22); sH.BackgroundColor3 = Color3.fromRGB(10,10,13)
+    sH.BorderSizePixel = 0; sH.LayoutOrder = 1; corner(sH, 3)
+    local sHL = label(sH,"TextLabel",{Size=UDim2.new(1,-8,1,0),Position=UDim2.fromOffset(6,0), Text="🔊  Sound Feedback", TextSize=11, Font=FONTS.bold, TextColor3=COLORS.accent, TextXAlignment=Enum.TextXAlignment.Left, Category="Labels"})
+    table.insert(Acc.texts, sHL)
+    regSearch("Sound Feedback", "Settings", sH)
+
+    local sndRow = Instance.new("Frame", settingsP)
+    sndRow.Size = UDim2.new(1,0,0,26); sndRow.BackgroundColor3 = Color3.fromRGB(8,8,10)
+    sndRow.BackgroundTransparency = .1; sndRow.BorderSizePixel = 0; sndRow.LayoutOrder = 2
+    corner(sndRow, 3)
+    label(sndRow,"TextLabel",{Position=UDim2.fromOffset(8,0),Size=UDim2.new(1,-36,1,0), Text="Sound Enabled",TextSize=10,Font=FONTS.default,TextColor3=COLORS.text, TextXAlignment=Enum.TextXAlignment.Left, Category="Labels"})
+    local sndBox = label(sndRow,"TextButton",{AnchorPoint=Vector2.new(1,.5), Position=UDim2.new(1,-3,.5,0),Size=UDim2.fromOffset(22,22), BackgroundColor3=Color3.fromRGB(9,30,15),Text="✓",TextSize=16, Font=FONTS.bold,TextColor3=Color3.fromRGB(70,230,120),AutoButtonColor=false, Category="Buttons"})
+    corner(sndBox,4); bindCursorHover(sndBox)
+    sndBox.MouseButton1Click:Connect(function()
+        sfxEnabled = not sfxEnabled
+        sndBox.Text = sfxEnabled and "✓" or "x"
+        sndBox.TextColor3 = sfxEnabled and Color3.fromRGB(70,230,120) or COLORS.pink
+        sndBox.BackgroundColor3 = sfxEnabled and Color3.fromRGB(9,30,15) or Color3.fromRGB(16,10,15)
+        playsfx(sfxEnabled and "toggleOn" or "toggleOff")
+    end)
+    addTT(sndBox, "Toggle all UI sounds")
+    regSearch("Sound Enabled", "Settings", sndRow)
+
+    local volRow = Instance.new("Frame", settingsP)
+    volRow.Size = UDim2.new(1,0,0,26); volRow.BackgroundTransparency = 1; volRow.BorderSizePixel = 0; volRow.LayoutOrder = 3
+    label(volRow,"TextLabel",{Position=UDim2.fromOffset(8,0),Size=UDim2.new(.36,0,1,0), Text="Volume",TextSize=10,Font=FONTS.default,TextColor3=COLORS.text, TextXAlignment=Enum.TextXAlignment.Left, Category="Labels"})
+    local vTrack = Instance.new("Frame", volRow)
+    vTrack.Position = UDim2.new(.36,0,.5,-5); vTrack.Size = UDim2.new(.50,0,0,10)
+    vTrack.BackgroundColor3 = Color3.fromRGB(10,10,11); vTrack.BorderSizePixel = 0; vTrack.Active = true; corner(vTrack,3); stroke(vTrack,Color3.fromRGB(28,28,30),1,.2)
+    bindCursorHover(vTrack)
+    local vFill = Instance.new("Frame", volRow)
+    vFill.Position = UDim2.new(.36,0,.5,-5); vFill.Size = UDim2.new(.25,0,0,10)
+    vFill.BackgroundColor3 = COLORS.accent; vFill.BorderSizePixel = 0; corner(vFill,3); Track.BG(vFill); Track.Grad(gradient(vFill,COLORS.accentDk,COLORS.accent,0))
+    local vLbl = label(volRow,"TextLabel",{AnchorPoint=Vector2.new(1,.5), Position=UDim2.new(1,-4,.5,0),Size=UDim2.fromOffset(34,20),Text="50%", TextSize=10,Font=Enum.Font.Code,TextColor3=COLORS.muted, TextXAlignment=Enum.TextXAlignment.Right, Category="Labels"})
+        
+    local function setVol(a)
+        a = math.clamp(a,0,1);
+        vFill.Size = UDim2.new(a*.50,0,0,10)
+        vLbl.Text = math.floor(a*100).."%"
+        uiSoundGroup.Volume = a 
+    end
+    setVol(0.5)
+    
+    local vDrag = false
+    vTrack.InputBegan:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.MouseButton1 then
+            vDrag = true
+            if settingsP then settingsP.ScrollingEnabled = false end
+            setVol((i.Position.X-vTrack.AbsolutePosition.X)/vTrack.AbsoluteSize.X)
+        end
+    end)
+    UserInputService.InputChanged:Connect(function(i)
+        if vDrag and i.UserInputType == Enum.UserInputType.MouseMovement then
+            setVol((i.Position.X-vTrack.AbsolutePosition.X)/vTrack.AbsoluteSize.X)
+        end
+    end)
+    UserInputService.InputEnded:Connect(function(i)
+        if vDrag and i.UserInputType == Enum.UserInputType.MouseButton1 then 
+            vDrag = false 
+            if settingsP then settingsP.ScrollingEnabled = true end
+        end
+    end)
+    regSearch("Volume", "Settings", volRow)
+    end
+end
+
+local historyCount = 0
+
+local histDateHdr = Instance.new("Frame", historyPage)
+histDateHdr.Size = UDim2.new(1,0,0,30); histDateHdr.BackgroundColor3 = Color3.fromRGB(8,8,10)
+histDateHdr.BackgroundTransparency = 0; histDateHdr.BorderSizePixel = 0; histDateHdr.LayoutOrder = -999
+local histDateLbl = label(histDateHdr,"TextLabel",{ Size=UDim2.new(1,-60,1,0), Position=UDim2.fromOffset(8,0), Text="📅  ".. (os.date and os.date("%d %B %Y") or "Session"), TextSize=12, Font=FONTS.bold, TextColor3=COLORS.text, TextXAlignment=Enum.TextXAlignment.Left, Category="Labels"})
+local histClearBtn2 = label(histDateHdr,"TextButton",{ AnchorPoint=Vector2.new(1,.5), Position=UDim2.new(1,-4,.5,0), Size=UDim2.fromOffset(52,20), BackgroundColor3=Color3.fromRGB(18,6,6), Text="Clear", TextSize=10, Font=FONTS.bold, TextColor3=COLORS.pink, AutoButtonColor=false, Category="Buttons"})
+corner(histClearBtn2,3); stroke(histClearBtn2,Color3.fromRGB(60,15,15),1,.2); bindCursorHover(histClearBtn2)
+histClearBtn2.MouseButton1Click:Connect(function()
+    playsfx("click")
+    for _,c in ipairs(historyPage:GetChildren()) do
+        if c:IsA("Frame") and c~=histDateHdr then c:Destroy() end
+    end
+    historyCount=0
+end)
+
+addHistoryEntry = function(txt, col, revertFn)
+    if not historyPage or not historyPage.Parent then return end
+    historyCount = historyCount + 1
+    local ts = os.date and os.date("%H:%M:%S") or ("+"..historyCount)
+
+    local row = Instance.new("Frame", historyPage)
+    row.Size = UDim2.new(1,0,0,36); row.BackgroundColor3 = Color3.fromRGB(7,7,9)
+    row.BackgroundTransparency = historyCount%2==0 and .05 or .12
+    row.BorderSizePixel = 0; row.LayoutOrder = historyCount
+
+    local sep = Instance.new("Frame",row)
+    sep.Size=UDim2.new(0,3,1,-4); sep.Position=UDim2.fromOffset(0,2)
+    sep.BackgroundColor3 = col or COLORS.accent; sep.BorderSizePixel=0; corner(sep,2)
+
+    local textW = revertFn and UDim2.new(1,-82,0,20) or UDim2.new(1,-40,0,20)
+
+    local tl = label(row,"TextLabel",{ Position=UDim2.fromOffset(10,2), Size=textW, Text=txt, TextSize=12, Font=Enum.Font.GothamBold, TextColor3=col or COLORS.text, TextXAlignment=Enum.TextXAlignment.Left, TextTruncate=Enum.TextTruncate.AtEnd, Category="Labels"})
+    local tsl = label(row,"TextLabel",{ Position=UDim2.fromOffset(10,20), Size=UDim2.new(1,-82,0,14), Text="⏱  "..ts, TextSize=10, Font=Enum.Font.Code, TextColor3=COLORS.muted, TextXAlignment=Enum.TextXAlignment.Left, Category="Labels"})
+    local numLbl = label(row,"TextLabel",{ AnchorPoint=Vector2.new(1,1), Position=UDim2.new(1,-4,1,-2), Size=UDim2.fromOffset(28,12), Text="#"..historyCount, TextSize=9, Font=Enum.Font.Code, TextColor3=Color3.fromRGB(45,45,50), TextXAlignment=Enum.TextXAlignment.Right, Category="Labels"})
+
+    if revertFn then
+        local reverted = false
+        local revertBtn = label(row,"TextButton",{ AnchorPoint=Vector2.new(1,.5), Position=UDim2.new(1,-4,.5,0), Size=UDim2.fromOffset(38,26), BackgroundColor3=Color3.fromRGB(10,18,10), Text="↩ ", TextSize=13, Font=FONTS.bold, TextColor3=Color3.fromRGB(90,220,110), AutoButtonColor=false, Category="Buttons"})
+        corner(revertBtn,4); stroke(revertBtn,Color3.fromRGB(30,60,30),1,.2); bindCursorHover(revertBtn)
+        revertBtn.MouseEnter:Connect(function() if not reverted then TweenService:Create(revertBtn,TweenInfo.new(.12),{BackgroundColor3=Color3.fromRGB(20,50,20)}):Play() end end)
+        revertBtn.MouseLeave:Connect(function() if not reverted then TweenService:Create(revertBtn,TweenInfo.new(.12),{BackgroundColor3=Color3.fromRGB(10,18,10)}):Play() end end)
+        revertBtn.MouseButton1Click:Connect(function()
+            if reverted then return end
+            reverted = true
+            playsfx("click")
+            pcall(revertFn)
+            revertBtn.Text="✓"
+            revertBtn.TextColor3=COLORS.muted
+            TweenService:Create(revertBtn,TweenInfo.new(.2),{BackgroundColor3=Color3.fromRGB(6,10,6)}):Play()
+            stroke(revertBtn,Color3.fromRGB(15,30,15),1,.4)
+            TweenService:Create(sep,TweenInfo.new(.2),{BackgroundColor3=COLORS.muted}):Play()
+            TweenService:Create(tl,TweenInfo.new(.2),{TextColor3=COLORS.muted}):Play()
+            addHistoryEntry("↩ Reverted: "..txt, COLORS.muted, nil)
+        end)
+    end
+    task.defer(function() if historyPage and historyPage.Parent then historyPage.CanvasPosition = Vector2.new(0, math.max(0, historyPage.AbsoluteCanvasSize.Y - historyPage.AbsoluteSize.Y)) end end)
+end
+
+local genCollapsed=false
+genArrow.MouseButton1Click:Connect(function() playsfx("click"); genCollapsed=not genCollapsed; genArrow.Text=genCollapsed and ">" or "^"; leftPane.Visible=not genCollapsed; leftDivLine.Visible=not genCollapsed end)
+local prevCollapsed=false
+prevArrow.MouseButton1Click:Connect(function() playsfx("click"); prevCollapsed=not prevCollapsed; prevArrow.Text=prevCollapsed and ">" or "^"; rightPane.Visible=not prevCollapsed end)
+
+-- ===================== ROW BUILDER =====================
+local function rowLine(p)
+    local l=Instance.new("Frame",p); l.AnchorPoint=Vector2.new(0,1); l.Position=UDim2.new(0,0,1,0); l.Size=UDim2.new(1,0,0,1); l.BackgroundColor3=Color3.fromRGB(28,28,30); l.BorderSizePixel=0
+end
+
+local function makeRow(h)
+    local r=Instance.new("Frame",settingsPage)
+    r.Size=UDim2.new(1,0,0,h or 28); Track.WindowBG(r); r.BackgroundTransparency=.04; r.BorderSizePixel=0; r.Active=true
+    table.insert(Elems.row, r)
+    rowLine(r)
+    if curSection then table.insert(curSection.rows,r) end
+    return r
+end
+
+local function rowLabel(row,txt, category)
+    local l=label(row,"TextLabel",{Name="Label",Size=UDim2.new(1,-32,1,0),Text=txt or "Option", TextSize=TSIZES.label,TextColor3=Color3.fromRGB(205,205,210), Category = category or "Labels"})
+    l.TextStrokeTransparency=.75; pad(l,3); return l
+end
+
+local function addSection(txt,tabName)
+    local sec=Instance.new("Frame",settingsPage)
+    sec.Size=UDim2.new(1,0,0,SIZES.sectionH); Track.WindowBG(sec); sec.BorderSizePixel=0
+    table.insert(Elems.section, sec)
+    local top=Instance.new("Frame",sec); top.Position=UDim2.fromOffset(0,4); top.Size=UDim2.new(1,0,0,2); top.BorderSizePixel=0; Track.DkBG(top)
+    local bot=Instance.new("Frame",sec); bot.AnchorPoint=Vector2.new(0,1); bot.Position=UDim2.new(0,0,1,0); bot.Size=UDim2.new(1,0,0,1); bot.BackgroundColor3=Color3.fromRGB(30,30,32); bot.BorderSizePixel=0
+    local l=label(sec,"TextLabel",{Position=UDim2.fromOffset(0,4),Size=UDim2.new(1,-28,0,21),Text=txt or "Section",TextSize=TSIZES.section, Category="Labels"}); pad(l,3)
+    local collapsed=false
+    local arr=label(sec,"TextButton",{AnchorPoint=Vector2.new(1,0),Position=UDim2.new(1,-3,0,7), Size=UDim2.fromOffset(16,16),BackgroundTransparency=0,BackgroundColor3=Color3.fromRGB(8,8,9), Text="^",TextSize=10,Font=Enum.Font.GothamBold,AutoButtonColor=false, Category="Buttons"})
+    corner(arr,3); stroke(arr,COLORS.line,1,.15); bindCursorHover(arr)
+    local grp={rows={},name=tabName}; curSection=grp
+    arr.MouseButton1Click:Connect(function() playsfx("click"); collapsed=not collapsed; arr.Text=collapsed and ">" or "^"; for _,r in ipairs(grp.rows) do if r and r.Parent then r.Visible=not collapsed end end end)
+end
+
+local function addToggle(txt,cb)
+    local row=makeRow(23); rowLabel(row,txt, "Labels")
+    if curSection then regSearch(txt,curSection.name,row) end
+    local en=false
+    local box=label(row,"TextButton",{AnchorPoint=Vector2.new(1,.5),Position=UDim2.new(1,-3,.5,0), Size=UDim2.fromOffset(SIZES.toggleBox,SIZES.toggleBox),BackgroundTransparency=0, BackgroundColor3=Color3.fromRGB(16,10,15),Text="x",TextColor3=COLORS.pink, TextSize=18,Font=FONTS.bold,AutoButtonColor=false, Category="Buttons"})
+    box.TextStrokeTransparency=.25; corner(box,4); bindCursorHover(box)
+    local inactStr=stroke(box,Color3.fromRGB(48,28,43),1,.05)
+    local glowStr=stroke(box,COLORS.accent,2,.0); glowStr.Transparency=1; table.insert(Acc.strokes,glowStr)
+    local function set(v, _silent)
+        local prevVal = en
+        en=v; menuState.toggles[txt]=v
+        box.Text=v and "✓" or "x"
+        box.TextColor3=v and Color3.fromRGB(70,230,120) or COLORS.pink
+        box.BackgroundColor3=v and Color3.fromRGB(9,30,15) or Color3.fromRGB(16,10,15)
+        row.BackgroundTransparency=v and .02 or .14
+        TweenService:Create(glowStr,TweenInfo.new(.2),{Transparency=v and .1 or 1}):Play()
+        inactStr.Transparency = v and 1 or .05
+        if not _silent and addHistoryEntry then
+            playsfx(v and "toggleOn" or "toggleOff")
+            addHistoryEntry((v and "✓ ON  " or "✗ OFF ")..txt, v and COLORS.accent or COLORS.pink, function() set(prevVal, true) end)
+        end
+        if cb then cb(v) end
+    end
+    row.MouseEnter:Connect(function() TweenService:Create(row,TweenInfo.new(.12),{BackgroundTransparency=0}):Play() end)
+    row.MouseLeave:Connect(function() TweenService:Create(row,TweenInfo.new(.12),{BackgroundTransparency=en and .02 or .14}):Play() end)
+    toggleSet[txt]=function(v) set(v, true) end
+    set(false, true)
+    table.insert(scriptConnections,box.MouseButton1Click:Connect(function() set(not en) end))
+end
+
+local function addButton(txt,cb)
+    local row=makeRow(23)
+    if curSection then regSearch(txt,curSection.name,row) end
+    local btn=label(row,"TextButton",{Size=UDim2.new(1,-12,1,-4),Position=UDim2.fromOffset(6,2),Text="", TextSize=TSIZES.label,BackgroundTransparency=0,BackgroundColor3=COLORS.accent, Font=FONTS.bold,AutoButtonColor=false, Category="Buttons"})
+    corner(btn,4); Track.BG(btn); bubble(btn,20,true,nil,nil,true); bindCursorHover(btn)
+    local l2=label(btn,"TextLabel",{Size=UDim2.new(1,0,1,0),Text=txt,TextSize=TSIZES.label, Font=FONTS.bold,TextXAlignment=Enum.TextXAlignment.Center, Category="Buttons"}); l2.ZIndex=10
+    local btnSc=Instance.new("UIScale",btn); btnSc.Scale=1
+    btn.MouseEnter:Connect(function() TweenService:Create(btn,TweenInfo.new(.12),{BackgroundColor3=scaledC(COLORS.accent,1.15)}):Play(); TweenService:Create(btnSc,TweenInfo.new(.12),{Scale=1.03}):Play() end)
+    btn.MouseLeave:Connect(function() TweenService:Create(btn,TweenInfo.new(.12),{BackgroundColor3=COLORS.accent}):Play(); TweenService:Create(btnSc,TweenInfo.new(.12),{Scale=1}):Play() end)
+    table.insert(scriptConnections,btn.MouseButton1Click:Connect(function()
+        playsfx("click"); TweenService:Create(btn,TweenInfo.new(.08),{BackgroundColor3=COLORS.accentDk}):Play()
+        task.delay(.08,function() if btn.Parent then TweenService:Create(btn,TweenInfo.new(.12),{BackgroundColor3=COLORS.accent}):Play() end end)
+        if addHistoryEntry then addHistoryEntry("🔘 "..txt, COLORS.accent) end
+        if cb then cb() else AddLog("Clicked: "..txt,COLORS.accent) end
+    end))
+end
+
+local function addSlider(txt,val,fillScale,cb)
+    local row=makeRow(23)
+    if curSection then regSearch(txt,curSection.name,row) end
+    local track=Instance.new("Frame",row); track.Position=UDim2.fromOffset(0,3); track.Size=UDim2.new(1,-2,0,SIZES.sliderH); track.BackgroundColor3=Color3.fromRGB(10,10,11); track.BorderSizePixel=0; track.Active=true; stroke(track,Color3.fromRGB(28,28,30),1,.15); bindCursorHover(track)
+    local fill=Instance.new("Frame",row); fill.Position=UDim2.fromOffset(0,3); fill.Size=UDim2.new(fillScale or .5,0,0,SIZES.sliderH); fill.BackgroundColor3=COLORS.accent; fill.BorderSizePixel=0; fill.Active=true; Track.Grad(gradient(fill,COLORS.accentDk,COLORS.accent,0)); bubble(fill,20,false,nil,nil,true)
+    rowLabel(row,txt, "Sliders")
+    local vt=label(row,"TextLabel",{AnchorPoint=Vector2.new(1,0),Position=UDim2.new(1,-5,0,0), Size=UDim2.fromOffset(72,23),Text=tostring(val or 50),TextSize=TSIZES.value,TextXAlignment=Enum.TextXAlignment.Right, Category="Sliders"})
+    local maxN=(tonumber(tostring(val)) or 100)/(fillScale or .5)
+    local function setA(a)
+        a=math.clamp(a,0,1); fill.Size=UDim2.new(a,0,0,SIZES.sliderH)
+        vt.Text=tostring(math.floor(maxN*a+.5)); menuState.sliders[txt]=a
+        if cb then cb(a) end
+    end
+    local function fromX(x) setA((x-track.AbsolutePosition.X)/track.AbsoluteSize.X) end
+    sliderSet[txt]=setA; menuState.sliders[txt]=fillScale or .5
+    row.MouseEnter:Connect(function() TweenService:Create(track,TweenInfo.new(.12),{BackgroundColor3=Color3.fromRGB(18,18,20)}):Play() end)
+    row.MouseLeave:Connect(function() TweenService:Create(track,TweenInfo.new(.12),{BackgroundColor3=Color3.fromRGB(10,10,11)}):Play() end)
+    local dragging = false; local sf = nil; local prevVal = menuState.sliders[txt] or (fillScale or .5)
+    track.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            dragging = true; prevVal = menuState.sliders[txt] or (fillScale or .5); sf = row.Parent
+            if sf and sf:IsA("ScrollingFrame") then sf.ScrollingEnabled = false end
+            fromX(input.Position.X)
+        end
+    end)
+    UserInputService.InputChanged:Connect(function(input) if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then fromX(input.Position.X) end end)
+    UserInputService.InputEnded:Connect(function(input)
+        if dragging and input.UserInputType == Enum.UserInputType.MouseButton1 then
+            dragging = false; if sf and sf:IsA("ScrollingFrame") then sf.ScrollingEnabled = true end
+            playsfx("slider")
+            if addHistoryEntry then
+                local snapVal = prevVal
+                addHistoryEntry("⟷ "..txt.." → "..vt.Text, COLORS.muted, function() setA(snapVal) end)
+            end
+        end
+    end)
+end
+
+local function addInput(txt,def,cb)
+    local row=makeRow(28)
+    if curSection then regSearch(txt,curSection.name,row) end
+    rowLabel(row,txt, "Inputs")
+    local box=Instance.new("TextBox",row)
+    box.AnchorPoint=Vector2.new(1,.5); box.Position=UDim2.new(1,-4,.5,0); box.Size=UDim2.fromOffset(120,20); box.BackgroundColor3=Color3.fromRGB(15,15,16)
+    box.BorderSizePixel=0; box.Text=def or ""; box.PlaceholderText="..."
+    box.PlaceholderColor3=COLORS.muted; box.TextColor3=COLORS.text; box.TextSize=11
+    box.Font=Enum.Font.Code; box.ClearTextOnFocus=false
+    corner(box,3); stroke(box,Color3.fromRGB(30,30,32),1,.2); pad(box,5); bindCursorHover(box); trackText("Inputs", box); trackColorText(box)
+    local prevText = def or ""
+    table.insert(scriptConnections,box.FocusLost:Connect(function() 
+        if box.Text ~= prevText then
+            local oldTxt = prevText; local newTxt = box.Text; prevText = newTxt
+            if cb then cb(newTxt) end
+            if addHistoryEntry then
+                addHistoryEntry("⌨ " .. txt .. " → " .. newTxt, COLORS.text, function() box.Text = oldTxt; prevText = oldTxt; if cb then cb(oldTxt) end end)
+            end
+        end
+    end))
+    return box
+end
+
+-- Configurable keybind row: shows a "rebind" button (click then press a key)
+-- and an ON/OFF toggle box. defaultKey is an Enum.KeyCode; onToggle(active)
+-- fires whenever the bound key is pressed and the bind is enabled, or when
+-- the toggle box itself is clicked directly.
+local function addKeybind(txt, defaultKey, onToggle)
+    local row=makeRow(23)
+    if curSection then regSearch(txt,curSection.name,row) end
+    rowLabel(row,txt, "Labels")
+
+    local active=false
+    local keyCode=defaultKey
+
+    local toggleBox=label(row,"TextButton",{AnchorPoint=Vector2.new(1,.5),Position=UDim2.new(1,-3,.5,0), Size=UDim2.fromOffset(SIZES.toggleBox,SIZES.toggleBox),BackgroundTransparency=0, BackgroundColor3=Color3.fromRGB(16,10,15),Text="x",TextColor3=COLORS.pink, TextSize=18,Font=FONTS.bold,AutoButtonColor=false, Category="Buttons"})
+    toggleBox.TextStrokeTransparency=.25; corner(toggleBox,4); bindCursorHover(toggleBox)
+    local inactStr=stroke(toggleBox,Color3.fromRGB(48,28,43),1,.05)
+    local glowStr=stroke(toggleBox,COLORS.accent,2,.0); glowStr.Transparency=1; table.insert(Acc.strokes,glowStr)
+
+    local keyBtn=label(row,"TextButton",{AnchorPoint=Vector2.new(1,.5),Position=UDim2.new(1,-3-SIZES.toggleBox-6,.5,0), Size=UDim2.fromOffset(64,20),BackgroundColor3=Color3.fromRGB(15,15,16), Text=keyCode and keyCode.Name or "None",TextColor3=COLORS.text,TextSize=11,Font=Enum.Font.Code,AutoButtonColor=false, Category="Inputs"})
+    corner(keyBtn,3); stroke(keyBtn,Color3.fromRGB(30,30,32),1,.2); bindCursorHover(keyBtn); trackText("Inputs", keyBtn); trackColorText(keyBtn)
+
+    local entry = {keyCode=keyCode, button=keyBtn, active=false}
+
+    local function setActive(v)
+        local prevVal = active
+        active=v; entry.active=v
+        toggleBox.Text=v and "✓" or "x"
+        toggleBox.TextColor3=v and Color3.fromRGB(70,230,120) or COLORS.pink
+        toggleBox.BackgroundColor3=v and Color3.fromRGB(9,30,15) or Color3.fromRGB(16,10,15)
+        row.BackgroundTransparency=v and .02 or .14
+        TweenService:Create(glowStr,TweenInfo.new(.2),{Transparency=v and .1 or 1}):Play()
+        inactStr.Transparency = v and 1 or .05
+        if addHistoryEntry then
+            playsfx(v and "toggleOn" or "toggleOff")
+            addHistoryEntry((v and "✓ ON  " or "✗ OFF ")..txt, v and COLORS.accent or COLORS.pink, function() setActive(prevVal) end)
+        end
+        if onToggle then onToggle(v) end
+    end
+    entry.setActive = setActive
+
+    row.MouseEnter:Connect(function() TweenService:Create(row,TweenInfo.new(.12),{BackgroundTransparency=0}):Play() end)
+    row.MouseLeave:Connect(function() TweenService:Create(row,TweenInfo.new(.12),{BackgroundTransparency=active and .02 or .14}):Play() end)
+    table.insert(scriptConnections,toggleBox.MouseButton1Click:Connect(function() setActive(not active) end))
+
+    table.insert(scriptConnections,keyBtn.MouseButton1Click:Connect(function()
+        playsfx("click")
+        keyBtn.Text="..."
+        waitingBind=entry
+    end))
+
+    table.insert(keybinds, entry)
+    return entry
+end
+
+-- Simple "rebind only" row (no on/off checkbox) — used for things like the
+-- menu open/close hotkey, where there's nothing to enable/disable, just a key.
+local function addRebindOnly(txt, currentKey, onRebind)
+    local row=makeRow(23)
+    if curSection then regSearch(txt,curSection.name,row) end
+    rowLabel(row,txt, "Labels")
+
+    local keyBtn=label(row,"TextButton",{AnchorPoint=Vector2.new(1,.5),Position=UDim2.new(1,-3,.5,0), Size=UDim2.fromOffset(80,20),BackgroundColor3=Color3.fromRGB(15,15,16), Text=currentKey and currentKey.Name or "None",TextColor3=COLORS.text,TextSize=11,Font=Enum.Font.Code,AutoButtonColor=false, Category="Inputs"})
+    corner(keyBtn,3); stroke(keyBtn,Color3.fromRGB(30,30,32),1,.2); bindCursorHover(keyBtn); trackText("Inputs", keyBtn); trackColorText(keyBtn)
+
+    local entry = {keyCode=currentKey, button=keyBtn, isRebindOnly=true}
+    entry.setKey = function(kc)
+        entry.keyCode = kc
+        keyBtn.Text = kc and kc.Name or "None"
+        if onRebind then onRebind(kc) end
+    end
+
+    table.insert(scriptConnections,keyBtn.MouseButton1Click:Connect(function()
+        playsfx("click")
+        keyBtn.Text="..."
+        waitingBind=entry
+    end))
+
+    table.insert(keybinds, entry)
+    return entry
+end
+
+
+
+local function addColorPicker(txt, defaultCol, cb)
+    local collapsedHeight = 28
+    local expandedHeight = 230
+    local row = makeRow(collapsedHeight)
+    row.ClipsDescendants = true
+    
+    local lbl = rowLabel(row, txt, "Palettes")
+    lbl.Size = UDim2.new(1, -32, 0, collapsedHeight)
+    lbl.TextYAlignment = Enum.TextYAlignment.Center
+
+    if curSection then regSearch(txt, curSection.name, row) end
+    
+    local previewBtn = Instance.new("TextButton", row)
+    previewBtn.Size = UDim2.fromOffset(20, 20)
+    previewBtn.Position = UDim2.new(1, -26, 0, 4)
+    previewBtn.BackgroundColor3 = defaultCol
+    previewBtn.Text = ""
+    previewBtn.AutoButtonColor = false
+    corner(previewBtn, 4)
+    stroke(previewBtn, COLORS.lineLight, 1, 0)
+    bindCursorHover(previewBtn)
+
+    local curH, curS, curV = defaultCol:ToHSV()
+    local expanded = false
+
+    local bodyCont = Instance.new("Frame", row)
+    bodyCont.Size = UDim2.new(1, 0, 0, expandedHeight - collapsedHeight)
+    bodyCont.Position = UDim2.new(0, 0, 0, collapsedHeight)
+    bodyCont.BackgroundTransparency = 1
+    bodyCont.Visible = false
+
+    local colorBox = Instance.new("TextButton", bodyCont)
+    colorBox.Size = UDim2.new(1, -45, 0, 150)
+    colorBox.Position = UDim2.new(0, 10, 0, 10)
+    colorBox.AutoButtonColor = false
+    colorBox.Text = ""
+    corner(colorBox, 4)
+    stroke(colorBox, COLORS.lineLight, 1, 0)
+
+    local satFrame = Instance.new("Frame", colorBox)
+    satFrame.Size = UDim2.new(1, 0, 1, 0)
+    satFrame.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+    satFrame.BorderSizePixel = 0
+    corner(satFrame, 4)
+    local satGrad = Instance.new("UIGradient", satFrame)
+    satGrad.Transparency = NumberSequence.new({NumberSequenceKeypoint.new(0, 0), NumberSequenceKeypoint.new(1, 1)})
+    
+    local valFrame = Instance.new("Frame", colorBox)
+    valFrame.Size = UDim2.new(1, 0, 1, 0)
+    valFrame.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+    valFrame.BorderSizePixel = 0
+    corner(valFrame, 4)
+    local valGrad = Instance.new("UIGradient", valFrame)
+    valGrad.Rotation = -90
+    valGrad.Transparency = NumberSequence.new({NumberSequenceKeypoint.new(0, 0), NumberSequenceKeypoint.new(1, 1)})
+
+    local colorThumb = Instance.new("Frame", colorBox)
+    colorThumb.Size = UDim2.fromOffset(10, 10)
+    colorThumb.AnchorPoint = Vector2.new(0.5, 0.5)
+    colorThumb.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+    corner(colorThumb, 10)
+    stroke(colorThumb, Color3.fromRGB(0,0,0), 1, 0.2)
+
+    local hueSlider = Instance.new("TextButton", bodyCont)
+    hueSlider.Size = UDim2.new(0, 16, 0, 150)
+    hueSlider.Position = UDim2.new(1, -26, 0, 10)
+    hueSlider.AutoButtonColor = false
+    hueSlider.Text = ""
+    corner(hueSlider, 4)
+    stroke(hueSlider, COLORS.lineLight, 1, 0)
+
+    local hueGrad = Instance.new("UIGradient", hueSlider)
+    hueGrad.Rotation = 90
+    hueGrad.Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 0, 0)),
+        ColorSequenceKeypoint.new(0.167, Color3.fromRGB(255, 0, 255)),
+        ColorSequenceKeypoint.new(0.333, Color3.fromRGB(0, 0, 255)),
+        ColorSequenceKeypoint.new(0.5, Color3.fromRGB(0, 255, 255)),
+        ColorSequenceKeypoint.new(0.667, Color3.fromRGB(0, 255, 0)),
+        ColorSequenceKeypoint.new(0.833, Color3.fromRGB(255, 255, 0)),
+        ColorSequenceKeypoint.new(1, Color3.fromRGB(255, 0, 0))
+    })
+
+    local hueThumb = Instance.new("Frame", hueSlider)
+    hueThumb.Size = UDim2.new(1, 4, 0, 6)
+    hueThumb.Position = UDim2.new(0, -2, 0, 0)
+    hueThumb.AnchorPoint = Vector2.new(0, 0.5)
+    hueThumb.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+    corner(hueThumb, 2)
+    stroke(hueThumb, Color3.fromRGB(0,0,0), 1, 0.5)
+
+    local hexInput = Instance.new("TextBox", bodyCont)
+    hexInput.Size = UDim2.new(0.5, -15, 0, 24)
+    hexInput.Position = UDim2.new(0, 10, 0, 170)
+    hexInput.BackgroundColor3 = Color3.fromRGB(15, 15, 16)
+    hexInput.TextColor3 = COLORS.text
+    hexInput.Font = Enum.Font.Code
+    hexInput.TextSize = 11
+    hexInput.ClearTextOnFocus = false
+    corner(hexInput, 4)
+    stroke(hexInput, COLORS.line, 1, 0.2)
+    bindCursorHover(hexInput)
+    trackText("Palettes", hexInput)
+    trackColorText(hexInput)
+
+    local rgbInput = Instance.new("TextBox", bodyCont)
+    rgbInput.Size = UDim2.new(0.5, -15, 0, 24)
+    rgbInput.Position = UDim2.new(0.5, 5, 0, 170)
+    rgbInput.BackgroundColor3 = Color3.fromRGB(15, 15, 16)
+    rgbInput.TextColor3 = COLORS.text
+    rgbInput.Font = Enum.Font.Code
+    rgbInput.TextSize = 11
+    rgbInput.ClearTextOnFocus = false
+    corner(rgbInput, 4)
+    stroke(rgbInput, COLORS.line, 1, 0.2)
+    bindCursorHover(rgbInput)
+    trackText("Palettes", rgbInput)
+    trackColorText(rgbInput)
+
+    local function updateUI()
+        colorBox.BackgroundColor3 = Color3.fromHSV(curH, 1, 1)
+        colorThumb.Position = UDim2.new(curS, 0, 1 - curV, 0)
+        hueThumb.Position = UDim2.new(0, -2, 1 - curH, 0)
+
+        local fin = Color3.fromHSV(curH, curS, curV)
+        previewBtn.BackgroundColor3 = fin
+        local r, g, b = math.round(fin.R * 255), math.round(fin.G * 255), math.round(fin.B * 255)
+        
+        if not hexInput:IsFocused() then hexInput.Text = string.format("#%02X%02X%02X", r, g, b) end
+        if not rgbInput:IsFocused() then rgbInput.Text = string.format("%d, %d, %d", r, g, b) end
+
+        if cb then cb(fin) end
+    end
+
+    local draggingColor, draggingHue = false, false
+    local dragStartH, dragStartS, dragStartV = curH, curS, curV
+
+    local function setCol(input)
+        local rx = math.clamp(input.Position.X - colorBox.AbsolutePosition.X, 0, colorBox.AbsoluteSize.X)
+        local ry = math.clamp(input.Position.Y - colorBox.AbsolutePosition.Y, 0, colorBox.AbsoluteSize.Y)
+        curS = rx / colorBox.AbsoluteSize.X
+        curV = 1 - (ry / colorBox.AbsoluteSize.Y)
+        updateUI()
+    end
+
+    local function setHue(input)
+        local ry = math.clamp(input.Position.Y - hueSlider.AbsolutePosition.Y, 0, hueSlider.AbsoluteSize.Y)
+        curH = 1 - (ry / hueSlider.AbsoluteSize.Y)
+        updateUI()
+    end
+
+    colorBox.InputBegan:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.MouseButton1 then
+            draggingColor = true
+            dragStartH, dragStartS, dragStartV = curH, curS, curV 
+            local sf = row.Parent
+            if sf and sf:IsA("ScrollingFrame") then sf.ScrollingEnabled = false end
+            setCol(i)
+        end
+    end)
+    
+    hueSlider.InputBegan:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.MouseButton1 then
+            draggingHue = true
+            dragStartH, dragStartS, dragStartV = curH, curS, curV 
+            local sf = row.Parent
+            if sf and sf:IsA("ScrollingFrame") then sf.ScrollingEnabled = false end
+            setHue(i)
+        end
+    end)
+
+    UserInputService.InputChanged:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.MouseMovement then
+            if draggingColor then setCol(i)
+            elseif draggingHue then setHue(i) end
+        end
+    end)
+
+    UserInputService.InputEnded:Connect(function(i)
+         if i.UserInputType == Enum.UserInputType.MouseButton1 then
+            if draggingColor or draggingHue then
+                draggingColor = false
+                draggingHue = false
+                local sf = row.Parent
+                if sf and sf:IsA("ScrollingFrame") then sf.ScrollingEnabled = true end
+                
+                if addHistoryEntry then 
+                    local snapH, snapS, snapV = dragStartH, dragStartS, dragStartV
+                    addHistoryEntry("🎨 Changed color: " .. txt, previewBtn.BackgroundColor3, function()
+                        curH, curS, curV = snapH, snapS, snapV
+                        updateUI()
+                    end)
+                end
+            end
+        end
+    end)
+
+    hexInput:GetPropertyChangedSignal("Text"):Connect(function()
+        if not hexInput:IsFocused() then return end
+        local t = hexInput.Text:gsub("#", "")
+        if #t == 6 then
+            local r, g, b = tonumber(t:sub(1,2), 16), tonumber(t:sub(3,4), 16), tonumber(t:sub(5,6), 16)
+            if r and g and b then curH, curS, curV = Color3.fromRGB(r, g, b):ToHSV(); updateUI() end
+        end
+    end)
+
+    rgbInput:GetPropertyChangedSignal("Text"):Connect(function()
+        if not rgbInput:IsFocused() then return end
+        local parts = rgbInput.Text:split(",")
+        if #parts == 3 then
+            local r = tonumber(parts[1]:match("%d+")); local g = tonumber(parts[2]:match("%d+")); local b = tonumber(parts[3]:match("%d+"))
+            if r and g and b and r <= 255 and g <= 255 and b <= 255 then curH, curS, curV = Color3.fromRGB(r, g, b):ToHSV(); updateUI() end
+        end
+    end)
+
+    hexInput.FocusLost:Connect(function(enter)
+        if enter then
+            local t = hexInput.Text:gsub("#", "")
+            if #t == 6 then
+                local r, g, b = tonumber(t:sub(1,2), 16), tonumber(t:sub(3,4), 16), tonumber(t:sub(5,6), 16)
+                if r and g and b then
+                    local oldH, oldS, oldV = curH, curS, curV 
+                    curH, curS, curV = Color3.fromRGB(r, g, b):ToHSV()
+                    updateUI()
+                    if addHistoryEntry then 
+                        addHistoryEntry("🎨 Hex Changed: " .. txt, previewBtn.BackgroundColor3, function()
+                            curH, curS, curV = oldH, oldS, oldV
+                            updateUI()
+                         end) 
+                    end
+                end
+            end
+        end
+        updateUI()
+    end)
+
+    previewBtn.MouseButton1Click:Connect(function()
+        expanded = not expanded
+        if expanded then bodyCont.Visible = true end 
+        local tw = TweenService:Create(row, TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Size = UDim2.new(1, 0, 0, expanded and expandedHeight or collapsedHeight)})
+        tw:Play()
+        if not expanded then task.delay(0.25, function() if not expanded then bodyCont.Visible = false end end) end
+        playsfx("click")
+    end)
+
+    updateUI()
+end
+
+-- ===================== TAB CONTENT =====================
+local TAB_CONTENT = {
+    Settings = {
+        {"section", "Hotkeys"},
+        {"rebind", "Open / Close Menu", TOGGLE_KEY, function(kc)
+            TOGGLE_KEY = kc
+        end},
+    },
+    Themes = {
+        {"section", "UI Styling"},
+        {"button", "Bubble Theme", function() setBubbles(true) end},
+        {"button", "Solid Theme", function() setBubbles(false) end},
+        
+        {"section", "Colors"},
+        {"colorpicker", "Accent Color (Buttons, etc.)", COLORS.accent, function(c)
+            ui.savedAccentColor = c
+            if not ui.rainbow then setAccent(c) end
+        end},
+        {"colorpicker", "Text Color (Global)", COLORS.text, function(c) setTextColor(c) end},
+        {"colorpicker", "Window Background", COLORS.windowBg, function(c) setWindowBackground(c) end},
+        {"colorpicker", "Panel Color", COLORS.panel, function(c) setPanel(c) end},
+        {"colorpicker", "Panel2 Color", COLORS.panel2, function(c) setPanel2(c) end},
+        {"colorpicker", "Scrollbar Color", COLORS.scrollbar, function(c) setScrollbarColor(c) end},
+
+        {"section", "Open / Close Effect"},
+        {"colorpicker", "Effect Glow Color", ui.glowColor, function(c) ui.glowColor = c end},
+
+        {"section", "Rainbow"},
+        {"toggle", "Rainbow Accent (Dyser title, buttons, etc.)", function(v)
+            ui.rainbow = v
+            if not v then
+                setAccent(ui.savedAccentColor or COLORS.accent)
+            end
+        end},
+        {"slider", "Rainbow Speed", 40, 0.4, function(a) ui.rainbowSpeed = a * 2.0 end},
+
+        {"section", "Transparency"},
+        {"slider", "Window BG", 0, 0, function(a) setWindowTransparency(a) end},
+        {"slider", "TopBar", 0, 0, function(a) setPanel2Transparency(a) end},
+        {"slider", "Side Panel", 0, 0, function(a) setPanelTransparency(a) end},
+        
+        {"section", "Tab Scaling"},
+        {"slider", "Top Tabs Size", 50, 0.5, function(a) updateTextSize("TopTabs", math.floor(8 + a * 16)) end},
+        {"slider", "Side Tabs Size", 50, 0.5, function(a) updateTextSize("SideTabs", math.floor(8 + a * 16)) end},
+        
+        {"section", "Element Scaling"},
+        {"slider", "Copy / Save Buttons Size", 50, 0.5, function(a) updateTextSize("ActionButtons", math.floor(9 + a * 14)) end},
+        {"slider", "Regular Buttons Size", 50, 0.5, function(a) updateTextSize("Buttons", math.floor(9 + a * 16)) end},
+        {"slider", "Slider Text Size", 50, 0.5, function(a) updateTextSize("Sliders", math.floor(9 + a * 16)) end},
+        {"slider", "Input Fields Size", 50, 0.5, function(a) updateTextSize("Inputs", math.floor(8 + a * 14)) end},
+        {"slider", "Palette Text Size", 50, 0.5, function(a) updateTextSize("Palettes", math.floor(8 + a * 14)) end},
+        {"slider", "Other Text Size", 50, 0.5, function(a) updateTextSize("Labels", math.floor(9 + a * 16)) end},
+    },
+
+    Cursor = {
+        {"section", "Cursor"},
+        {"toggle", "Enable Cursor", function(v)
+            cur.enabled = v
+            if not v then
+                cur.frame.Visible = false
+                UserInputService.MouseIconEnabled = true
+                cur.inside = false
+            end
+        end},
+        {"toggle", "Spin", function(v)
+            cur.spinEnabled = v
+            if not v then
+                cur.angle = 0
+                cur.ring.Rotation = 0
+                cur.ch.Rotation  = 0
+                cur.cv.Rotation  = 0
+            end
+        end},
+        {"slider", "Spin Speed", 120, 120/360, function(a) cur.spinSpeed = a * 360 end},
+        {"slider", "Glow Size", 44, 44/100, function(a)
+            local s = math.floor(a * 100 + 0.5)
+            cur.glow.Size = UDim2.fromOffset(s, s)
+        end},
+        {"slider", "Ring Size", 22, 22/100, function(a)
+            local s = math.floor(a * 100 + 0.5)
+            cur.ring.Size = UDim2.fromOffset(s, s)
+        end},
+        {"slider", "Dot Size", 4, 4/100, function(a)
+            local s = math.max(1, math.floor(a * 100 + 0.5))
+            cur.dot.Size = UDim2.fromOffset(s, s)
+        end},
+        {"slider", "Cross Size", 16, 16/100, function(a)
+            local s = math.max(1, math.floor(a * 100 + 0.5))
+            cur.ch.Size = UDim2.fromOffset(s, 2)
+            cur.cv.Size = UDim2.fromOffset(2, s)
+        end},
+        {"slider", "Glow Alpha", 80, 0.8, function(a) cur.glow.BackgroundTransparency = a end},
+        {"slider", "Ring Alpha", 0, 0, function(a) cur.stroke.Transparency = a end},
+        {"toggle", "Rainbow", function(v)
+            cur.rainbow = v
+        end},
+        {"slider", "Rainbow Speed", 40, 0.4, function(a)
+            cur.rainbowSpeed = a * 2.0
+        end},
+        {"colorpicker", "Cursor Color", COLORS.accent, function(c)
+            if cur.rainbow then return end
+            cur.glow.BackgroundColor3 = c
+            cur.dot.BackgroundColor3 = c
+            cur.ch.BackgroundColor3 = c
+            cur.cv.BackgroundColor3 = c
+            cur.stroke.Color = c
+        end},
+    }
+}
+
+-- ===================== BUILDER =====================
+local function buildPage(page,rows,tabName)
+    settingsPage=page; curSection=nil
+    for _,r in ipairs(rows) do
+        if     r[1]=="section"      then addSection(r[2],tabName)
+        elseif r[1]=="toggle"       then addToggle(r[2],r[3])
+        elseif r[1]=="button"       then addButton(r[2],r[3])
+        elseif r[1]=="slider"       then addSlider(r[2],r[3],r[4],r[5])
+        elseif r[1]=="input"        then local b=addInput(r[2],r[3],r[4]);
+        elseif r[1]=="colorpicker"  then addColorPicker(r[2],r[3],r[4])
+        elseif r[1]=="keybind"      then addKeybind(r[2],r[3],r[4])
+        elseif r[1]=="rebind"       then addRebindOnly(r[2],r[3],r[4])
+        end
+    end
+end
+
+for _,name in ipairs(SIDE_TABS) do
+    if Nav.tabPages[name] then buildPage(Nav.tabPages[name],TAB_CONTENT[name] or {},name) end
+end
+
+if Nav.rightTabPgs["Settings"] then
+    buildPage(Nav.rightTabPgs["Settings"], TAB_CONTENT["Settings"] or {}, "Settings")
+end
+
+if Nav.rightTabPgs["Themes"] then
+    buildPage(Nav.rightTabPgs["Themes"], TAB_CONTENT["Themes"] or {}, "Themes")
+end
+
+if Nav.rightTabPgs["Cursor"] then
+    buildPage(Nav.rightTabPgs["Cursor"], TAB_CONTENT["Cursor"] or {}, "Cursor")
+end
+
+-- auto-enable cursor toggle so it starts ON
+if toggleSet["Enable Cursor"] then toggleSet["Enable Cursor"](true) end
+
+if Nav.topTabBtns[1] then selectTop(Nav.topTabBtns[1].button,Nav.topTabBtns[1].name) end
+
+-- ===================== RESIZE HINT / COLLAPSE TO LOGO =====================
+local resizeHint=Instance.new("TextButton",window)
+resizeHint.AnchorPoint=Vector2.new(1,1); resizeHint.Position=UDim2.new(1,0,1,0)
+resizeHint.Size=UDim2.fromOffset(12,12); resizeHint.BackgroundTransparency=.35
+resizeHint.BorderSizePixel=0; resizeHint.Rotation=45; resizeHint.Text=""; resizeHint.AutoButtonColor=false
+Track.BG(resizeHint)
+
+local isCollapsed=false
+local preCollapseSize, preCollapsePos = nil, nil
+
+-- ===================== TOGGLE COOLDOWN =====================
+-- защита от спама: открытие/закрытие/сворачивание/разворачивание меню
+-- (любым способом — RightShift, кнопка "-", клик по кружку, мобильная кнопка)
+-- не чаще одного раза в TOGGLE_COOLDOWN секунд
+local TOGGLE_COOLDOWN = 1.0
+local lastToggleTime = 0
+local function canToggle()
+    local now = os.clock()
+    if now - lastToggleTime < TOGGLE_COOLDOWN then
+        return false
+    end
+    lastToggleTime = now
+    return true
+end
+
+-- small circular bubble shown only while collapsed
+local collapseBubble=Instance.new("ImageButton",screenGui)
+collapseBubble.Name="DyserCollapseBubble"
+collapseBubble.Size=UDim2.fromOffset(54,54)
+collapseBubble.BackgroundColor3=COLORS.panel2
+collapseBubble.Image=""
+collapseBubble.Visible=false
+collapseBubble.AutoButtonColor=false
+collapseBubble.ZIndex=50
+corner(collapseBubble,27)
+Track.Panel2BG(collapseBubble)
+local collapseStroke=stroke(collapseBubble,COLORS.accent,2,.1)
+table.insert(Acc.strokes,collapseStroke)
+
+local collapseLogo=Instance.new("ImageLabel",collapseBubble)
+collapseLogo.Size=UDim2.new(0.7,0,0.7,0)
+collapseLogo.AnchorPoint=Vector2.new(.5,.5)
+collapseLogo.Position=UDim2.fromScale(.5,.5)
+collapseLogo.BackgroundTransparency=1
+collapseLogo.Image="rbxassetid://85321985213119"
+collapseLogo.ScaleType=Enum.ScaleType.Fit
+
+-- вспышка-эффект: расширяется и тает в момент схлопывания/раскрытия/сворачивания меню.
+-- Может быть круглой (для кружка/минимизации) или прямоугольной формы окна (для RightShift).
+local glowRing=Instance.new("Frame",screenGui)
+glowRing.Name="DyserGlowRing"
+glowRing.AnchorPoint=Vector2.new(.5,.5)
+glowRing.Size=UDim2.fromOffset(40,40)
+glowRing.BackgroundTransparency=1
+glowRing.BorderSizePixel=0
+glowRing.ZIndex=49
+glowRing.Visible=false
+local glowCorner=corner(glowRing,1000)
+local glowStroke=Instance.new("UIStroke",glowRing)
+glowStroke.Color=ui.glowColor
+glowStroke.Thickness=3
+glowStroke.Transparency=1
+
+-- круглая вспышка (кружок, minimize) — центр в точке, размер растёт как квадрат
+local function pulseGlow(centerPos, startSize, endSize, duration)
+    glowCorner.CornerRadius=UDim.new(0,1000)
+    glowRing.Position=UDim2.fromOffset(centerPos.X, centerPos.Y)
+    glowRing.Size=UDim2.fromOffset(startSize,startSize)
+    glowRing.Visible=true
+    glowStroke.Color=ui.glowColor
+    glowStroke.Transparency=0.1
+    glowStroke.Thickness=4
+    TweenService:Create(glowRing,TweenInfo.new(duration,Enum.EasingStyle.Quad,Enum.EasingDirection.Out),
+        {Size=UDim2.fromOffset(endSize,endSize)}):Play()
+    local fade=TweenService:Create(glowStroke,TweenInfo.new(duration,Enum.EasingStyle.Quad,Enum.EasingDirection.Out),
+        {Transparency=1, Thickness=0.5})
+    fade:Play()
+    fade.Completed:Connect(function()
+        glowRing.Visible=false
+    end)
+end
+
+-- прямоугольная вспышка размером с меню (RightShift открытие/закрытие):
+-- растёт ИЗ УГЛА окна (а не из центра) до полного размера окна, как разворачивающийся веер
+-- cornerAnchor: Vector2 (0,0)=top-left, (1,0)=top-right, (0,1)=bottom-left, (1,1)=bottom-right
+local function pulseGlowRect(cornerPixelPos, cornerAnchor, targetWidth, targetHeight, duration)
+    glowCorner.CornerRadius=UDim.new(0,12)   -- скругление как у самого окна, не идеальный круг
+    glowRing.AnchorPoint=cornerAnchor
+    glowRing.Position=UDim2.fromOffset(cornerPixelPos.X, cornerPixelPos.Y)
+    glowRing.Size=UDim2.fromOffset(targetWidth*0.08, targetHeight*0.08)
+    glowRing.Visible=true
+    glowStroke.Color=ui.glowColor
+    glowStroke.Transparency=0.1
+    glowStroke.Thickness=4
+    TweenService:Create(glowRing,TweenInfo.new(duration,Enum.EasingStyle.Quad,Enum.EasingDirection.Out),
+        {Size=UDim2.fromOffset(targetWidth, targetHeight)}):Play()
+    local fade=TweenService:Create(glowStroke,TweenInfo.new(duration,Enum.EasingStyle.Quad,Enum.EasingDirection.Out),
+        {Transparency=1, Thickness=0.5})
+    fade:Play()
+    fade.Completed:Connect(function()
+        glowRing.Visible=false
+        glowRing.AnchorPoint=Vector2.new(.5,.5)           -- возвращаем центр-якорь по умолчанию
+        glowCorner.CornerRadius=UDim.new(0,1000)          -- возвращаем круглую форму по умолчанию для след. кружка/minimize
+    end)
+end
+
+-- "СБОРКА" — обратный эффект: контур стартует размером с окно и СЖИМАЕТСЯ
+-- в маленькую точку у заданного угла. Используется при сворачивании (minimize),
+-- чтобы создавалось ощущение "меню стягивается и собирается" а не вспыхивает на месте.
+local function pulseGlowShrink(startWidth, startHeight, cornerPixelPos, cornerAnchor, duration)
+    glowCorner.CornerRadius=UDim.new(0,12)
+    glowRing.AnchorPoint=cornerAnchor
+    glowRing.Position=UDim2.fromOffset(cornerPixelPos.X, cornerPixelPos.Y)
+    glowRing.Size=UDim2.fromOffset(startWidth, startHeight)
+    glowRing.Visible=true
+    glowStroke.Color=ui.glowColor
+    glowStroke.Transparency=0.15
+    glowStroke.Thickness=3
+    -- контур сжимается до маленькой точки в углу — будто все края стягиваются туда
+    TweenService:Create(glowRing,TweenInfo.new(duration,Enum.EasingStyle.Quad,Enum.EasingDirection.In),
+        {Size=UDim2.fromOffset(startWidth*0.06, startHeight*0.06)}):Play()
+    local fade=TweenService:Create(glowStroke,TweenInfo.new(duration,Enum.EasingStyle.Quad,Enum.EasingDirection.In),
+        {Transparency=1, Thickness=0.5})
+    fade:Play()
+    fade.Completed:Connect(function()
+        glowRing.Visible=false
+        glowRing.AnchorPoint=Vector2.new(.5,.5)
+        glowCorner.CornerRadius=UDim.new(0,1000)
+    end)
+end
+
+local function expandFromBubble()
+    isCollapsed=false
+    playsfx("open")
+
+    -- зелёная вспышка-кольцо точно по центру кружка в момент его исчезновения
+    pulseGlow(Vector2.new(collapseBubble.AbsolutePosition.X+collapseBubble.AbsoluteSize.X/2, collapseBubble.AbsolutePosition.Y+collapseBubble.AbsoluteSize.Y/2), 20, 110, .5)
+
+    -- 1. пузырь медленно "сжимается" и тает, лого прокручивается напоследок
+    local shrink = TweenService:Create(collapseBubble, TweenInfo.new(.32,Enum.EasingStyle.Quad,Enum.EasingDirection.In),
+        {Size=UDim2.fromOffset(14,14), BackgroundTransparency=1})
+    local fadeStroke = TweenService:Create(collapseStroke, TweenInfo.new(.32,Enum.EasingStyle.Quad,Enum.EasingDirection.In),
+        {Transparency=1})
+    local spinOut = TweenService:Create(collapseLogo, TweenInfo.new(.32,Enum.EasingStyle.Quad,Enum.EasingDirection.In),
+        {Rotation=collapseLogo.Rotation+120, ImageTransparency=1})
+    shrink:Play(); fadeStroke:Play(); spinOut:Play()
+    shrink.Completed:Wait()
+
+    -- зелёная вспышка размером с будущее окно, растёт из левого верхнего угла —
+    -- такой же эффект, как при обычном открытии меню, а не круглый
+    local restoreSize = isMin and UDim2.new((preCollapseSize or fullSize).X.Scale,(preCollapseSize or fullSize).X.Offset,0,30) or (preCollapseSize or fullSize)
+    local finalPosForGlow = preCollapsePos or window.Position
+    local glowW = restoreSize.X.Scale * screenGui.AbsoluteSize.X + restoreSize.X.Offset
+    local glowH = restoreSize.Y.Scale * screenGui.AbsoluteSize.Y + restoreSize.Y.Offset
+    local glowX = finalPosForGlow.X.Scale * screenGui.AbsoluteSize.X + finalPosForGlow.X.Offset
+    local glowY = finalPosForGlow.Y.Scale * screenGui.AbsoluteSize.Y + finalPosForGlow.Y.Offset
+    pulseGlowRect(Vector2.new(glowX, glowY), Vector2.new(0,0), glowW, glowH, .65)
+
+    collapseBubble.Visible=false
+    collapseLogo.Rotation=0
+    collapseLogo.ImageTransparency=0
+    collapseBubble.BackgroundTransparency=0
+    collapseStroke.Transparency=.1
+
+    -- 2. окно появляется из той же точки, маленьким и полностью прозрачным
+    window.Visible=true
+    window.Size=UDim2.fromOffset(40,40)
+    window.Position=collapseBubble.Position
+    window.BackgroundTransparency=1
+    if windowStroke then windowStroke.Transparency=1 end
+    topBar.BackgroundTransparency=1
+    local savedBodyTransp = body.BackgroundTransparency
+    body.BackgroundTransparency=1
+
+    if not isMin then
+        body.Visible=true
+    end
+
+    -- 3. растягиваем окно и одновременно проявляем его и контент внутри — медленно и мягко, без рывка
+    TweenService:Create(window,TweenInfo.new(.75,Enum.EasingStyle.Quint,Enum.EasingDirection.Out),
+        {Size=restoreSize, Position=preCollapsePos or window.Position, BackgroundTransparency=0}):Play()
+    if windowStroke then
+        TweenService:Create(windowStroke,TweenInfo.new(.65,Enum.EasingStyle.Quad,Enum.EasingDirection.Out),
+            {Transparency=.35}):Play()
+    end
+    -- контент проявляется чуть позже самого окна — лёгкая "задержка слоями"
+    task.delay(.25, function()
+        if topBar and topBar.Parent then
+            TweenService:Create(topBar,TweenInfo.new(.45,Enum.EasingStyle.Quad,Enum.EasingDirection.Out),{BackgroundTransparency=0}):Play()
+        end
+        if body and body.Parent then
+            TweenService:Create(body,TweenInfo.new(.45,Enum.EasingStyle.Quad,Enum.EasingDirection.Out),{BackgroundTransparency=savedBodyTransp}):Play()
+        end
+    end)
+end
+
+local function collapseToCircle()
+    isCollapsed=true
+    preCollapseSize=window.Size
+    preCollapsePos=window.Position
+    playsfx("click")
+
+    -- 1. контент гаснет первым (медленный "выдох"), окно следом сжимается
+    local savedBodyTransp = body.BackgroundTransparency
+    TweenService:Create(topBar,TweenInfo.new(.3,Enum.EasingStyle.Quad,Enum.EasingDirection.In),{BackgroundTransparency=1}):Play()
+    TweenService:Create(body,TweenInfo.new(.3,Enum.EasingStyle.Quad,Enum.EasingDirection.In),{BackgroundTransparency=1}):Play()
+    task.wait(.1)
+
+    -- заметный "вдох" перед сжатием для пружинистости
+    local punch = TweenService:Create(window, TweenInfo.new(.15,Enum.EasingStyle.Quad,Enum.EasingDirection.Out),
+        {Size=UDim2.new(preCollapseSize.X.Scale,preCollapseSize.X.Offset+8,preCollapseSize.Y.Scale,preCollapseSize.Y.Offset+6)})
+    punch:Play(); punch.Completed:Wait()
+
+    local shrink=TweenService:Create(window,TweenInfo.new(.6,Enum.EasingStyle.Quint,Enum.EasingDirection.In),
+        {Size=UDim2.fromOffset(40,40), BackgroundTransparency=1})
+    if windowStroke then
+        TweenService:Create(windowStroke,TweenInfo.new(.4,Enum.EasingStyle.Quad,Enum.EasingDirection.In),{Transparency=1}):Play()
+    end
+    shrink:Play()
+    shrink.Completed:Wait()
+    window.Visible=false
+    window.BackgroundTransparency=0
+    topBar.BackgroundTransparency=0
+    body.BackgroundTransparency=savedBodyTransp
+    if windowStroke then windowStroke.Transparency=.35 end
+
+    -- 2. пузырь появляется на том же месте: маленький+прозрачный → растёт с лёгким overshoot, лого крутится при появлении
+    collapseBubble.Position=UDim2.fromOffset(window.AbsolutePosition.X, window.AbsolutePosition.Y)
+    collapseBubble.Size=UDim2.fromOffset(10,10)
+    collapseBubble.BackgroundTransparency=1
+    collapseBubble.Visible=true
+    collapseStroke.Transparency=1
+    collapseLogo.Rotation=-100
+    collapseLogo.ImageTransparency=1
+
+    -- зелёная вспышка-кольцо точно по центру того места, где появится кружок
+    -- (финальный размер кружка 54x54, поэтому центр = позиция + 27)
+    pulseGlow(Vector2.new(collapseBubble.Position.X.Offset+27, collapseBubble.Position.Y.Offset+27), 30, 130, .6)
+
+    TweenService:Create(collapseBubble,TweenInfo.new(.55,Enum.EasingStyle.Back,Enum.EasingDirection.Out),
+        {Size=UDim2.fromOffset(54,54), BackgroundTransparency=0}):Play()
+    TweenService:Create(collapseStroke,TweenInfo.new(.55,Enum.EasingStyle.Quad,Enum.EasingDirection.Out),
+        {Transparency=.1}):Play()
+    TweenService:Create(collapseLogo,TweenInfo.new(.6,Enum.EasingStyle.Back,Enum.EasingDirection.Out),
+        {Rotation=0, ImageTransparency=0}):Play()
+end
+
+resizeHint.MouseButton1Click:Connect(function()
+    if not isCollapsed and canToggle() then collapseToCircle() end
+end)
+
+-- allow dragging the little bubble around the screen while collapsed
+local bubbleDragging,bubbleDragStart,bubbleStartPos=false,nil,nil
+local bubbleDidDrag=false
+local BUBBLE_DRAG_THRESHOLD=4 -- pixels of movement before it counts as a drag, not a click
+
+collapseBubble.MouseButton1Click:Connect(function()
+    if isCollapsed and not bubbleDidDrag and canToggle() then expandFromBubble() end
+end)
+
+collapseBubble.InputBegan:Connect(function(i)
+    if i.UserInputType==Enum.UserInputType.MouseButton1 or i.UserInputType==Enum.UserInputType.Touch then
+        bubbleDragging=true; bubbleDidDrag=false; bubbleDragStart=i.Position; bubbleStartPos=collapseBubble.Position
+    end
+end)
+collapseBubble.InputEnded:Connect(function(i)
+    if i.UserInputType==Enum.UserInputType.MouseButton1 or i.UserInputType==Enum.UserInputType.Touch then
+        bubbleDragging=false
+    end
+end)
+table.insert(scriptConnections, UserInputService.InputChanged:Connect(function(i)
+    if bubbleDragging and (i.UserInputType==Enum.UserInputType.MouseMovement or i.UserInputType==Enum.UserInputType.Touch) then
+        local delta=i.Position-bubbleDragStart
+        if not bubbleDidDrag and (math.abs(delta.X)>BUBBLE_DRAG_THRESHOLD or math.abs(delta.Y)>BUBBLE_DRAG_THRESHOLD) then
+            bubbleDidDrag=true
+        end
+        collapseBubble.Position=UDim2.fromOffset(bubbleStartPos.X.Offset+delta.X, bubbleStartPos.Y.Offset+delta.Y)
+    end
+end))
+
+-- ===================== CLOSE =====================
+table.insert(scriptConnections,closeBtn.MouseButton1Click:Connect(function()
+    playsfx("click"); UserInputService.MouseIconEnabled = true
+    for _,c in ipairs(scriptConnections) do if c and c.Connected then c:Disconnect() end end
+    table.clear(scriptConnections)
+    if screenGui then screenGui:Destroy() end
+end))
+
+-- ===================== MAXIMIZE (removed — kept as inert constant for downstream code) =====================
+local isMaxed=false
+local preMaxSize, preMaxPos = nil, nil
+
+local function applyMaximizedSize()
+    -- no-op: maximize feature removed
+end
+
+screenGui:GetPropertyChangedSignal("AbsoluteSize"):Connect(applyMaximizedSize)
+
+-- ===================== MINIMIZE =====================
+fullSize=window.Size; local fullMin=szLim.MinSize; isMin=false
+local _minimizeGen = 0
+minimizeBtn.MouseButton1Click:Connect(function()
+    if not canToggle() then return end
+    playsfx("click")
+    if isMin then
+        isMin=false; body.Visible=true; szLim.MinSize=fullMin
+        _minimizeGen = _minimizeGen + 1
+        minimizeBtn.Text="-"
+        -- restore to maximized size if it was maximized before minimizing,
+        -- otherwise restore to its normal pre-minimize size
+        local restoreSize
+        if isMaxed then
+            local sz = screenGui.AbsoluteSize
+            restoreSize = UDim2.fromOffset(sz.X, sz.Y)
+            window.Position = UDim2.fromOffset(0,0)
+        else
+            restoreSize = fullSize
+        end
+        -- зелёная вспышка размером с окно, растёт из левого верхнего угла, в момент восстановления из мини-полоски
+        local rw = restoreSize.X.Scale * screenGui.AbsoluteSize.X + restoreSize.X.Offset
+        local rh = restoreSize.Y.Scale * screenGui.AbsoluteSize.Y + restoreSize.Y.Offset
+        pulseGlowRect(Vector2.new(window.AbsolutePosition.X, window.AbsolutePosition.Y), Vector2.new(0,0), rw, rh, .5)
+        TweenService:Create(window,TweenInfo.new(.6,Enum.EasingStyle.Quint,Enum.EasingDirection.Out), {Size=restoreSize}):Play()
+        TweenService:Create(minimizeBtn,TweenInfo.new(.35),{TextColor3=COLORS.text}):Play()
+    else
+        isMin=true; minimizeBtn.Text="□"
+        TweenService:Create(minimizeBtn,TweenInfo.new(.25),{TextColor3=COLORS.accent}):Play()
+        local shrinkWidth = isMaxed and screenGui.AbsoluteSize.X or fullSize.X.Offset
+        -- зелёная вспышка "собирается" из полного размера окна в точку у левого верхнего угла —
+        -- эффект стягивания/сборки, синхронный со сжатием самого окна в полоску
+        pulseGlowShrink(window.AbsoluteSize.X, window.AbsoluteSize.Y, Vector2.new(window.AbsolutePosition.X, window.AbsolutePosition.Y), Vector2.new(0,0), .55)
+        local shrink=TweenService:Create(window,TweenInfo.new(.55,Enum.EasingStyle.Quint,Enum.EasingDirection.In), {Size=UDim2.fromOffset(shrinkWidth,30)})
+        local savedBodyTransp = body.BackgroundTransparency
+        body.BackgroundColor3=COLORS.windowBg
+        TweenService:Create(body,TweenInfo.new(.3),{BackgroundTransparency=math.clamp(savedBodyTransp+.5,0,1)}):Play()
+        _minimizeGen = _minimizeGen + 1
+        local myGen = _minimizeGen
+        task.delay(.3,function()
+            if myGen ~= _minimizeGen then return end -- state changed (un-minimized/maximized) while waiting
+            body.Visible=false; body.BackgroundTransparency=savedBodyTransp
+            szLim.MinSize=Vector2.new(fullMin.X,30)
+            shrink:Play()
+        end)
+    end
+end)
+
+-- ===================== MAXIMIZE (removed) =====================
+
+-- ===================== DRAG =====================
+local dragging,dragStart,startPosAbs=false,nil,nil
+table.insert(scriptConnections,topBar.InputBegan:Connect(function(i)
+    if i.UserInputType==Enum.UserInputType.MouseButton1 then dragging=true; dragStart=i.Position; startPosAbs=window.AbsolutePosition end
+end))
+table.insert(scriptConnections,topBar.InputEnded:Connect(function(i)
+    if i.UserInputType==Enum.UserInputType.MouseButton1 then dragging=false end
+end))
+table.insert(scriptConnections,UserInputService.InputChanged:Connect(function(i)
+    if i.UserInputType==Enum.UserInputType.MouseMovement then
+        if dragging and dragStart then
+            local d=i.Position-dragStart
+            local newX = startPosAbs.X+d.X
+            local newY = startPosAbs.Y+d.Y
+            -- не даём перетащить окно за пределы экрана (особенно вверх,
+            -- чтобы топбар с кнопками не улетал за видимую область)
+            local screenSize = screenGui.AbsoluteSize
+            local winSize = window.AbsoluteSize
+            newX = math.clamp(newX, 0, math.max(0, screenSize.X - winSize.X))
+            newY = math.clamp(newY, 0, math.max(0, screenSize.Y - winSize.Y))
+            window.Position=UDim2.fromOffset(newX,newY)
+        end
+    end
+end))
+
+-- ===================== TOGGLE KEY =====================
+table.insert(scriptConnections,UserInputService.InputBegan:Connect(function(input,proc)
+    if input.UserInputType==Enum.UserInputType.MouseButton1 and cur.inside then cursorPulse() end
+    if input.UserInputType~=Enum.UserInputType.Keyboard then return end
+    if input.KeyCode==Enum.KeyCode.Delete then
+        if not screenGui or not screenGui.Parent then return end
+        for _,c in ipairs(scriptConnections) do if c and c.Connected then c:Disconnect() end end
+        table.clear(scriptConnections)
+        local killTween=TweenService:Create(window,TweenInfo.new(.35,Enum.EasingStyle.Back,Enum.EasingDirection.In),
+            {Size=UDim2.new(0,0,0,0),Position=UDim2.new(MENU_POS.x+MENU_SIZE.x/2,0,MENU_POS.y+MENU_SIZE.y/2,0)})
+        UserInputService.MouseIconEnabled = true
+        killTween:Play(); killTween.Completed:Wait()
+        if screenGui then screenGui:Destroy() end
+        return
+    end
+    if TOGGLE_KEY and input.KeyCode==TOGGLE_KEY then
+        if not screenGui or not screenGui.Parent then return end
+        if not canToggle() then return end
+        if isCollapsed then
+            -- меню свёрнуто в кружок: RightShift прячет/показывает именно кружок, круглым эффектом
+            if collapseBubble.Visible then
+                pulseGlow(Vector2.new(collapseBubble.AbsolutePosition.X+collapseBubble.AbsoluteSize.X/2, collapseBubble.AbsolutePosition.Y+collapseBubble.AbsoluteSize.Y/2), 20, 100, .5)
+                local t=TweenService:Create(collapseBubble,TweenInfo.new(.3,Enum.EasingStyle.Quad,Enum.EasingDirection.In),
+                    {Size=UDim2.fromOffset(10,10), BackgroundTransparency=1})
+                TweenService:Create(collapseStroke,TweenInfo.new(.3,Enum.EasingStyle.Quad,Enum.EasingDirection.In),{Transparency=1}):Play()
+                TweenService:Create(collapseLogo,TweenInfo.new(.3,Enum.EasingStyle.Quad,Enum.EasingDirection.In),{ImageTransparency=1}):Play()
+                t:Play(); t.Completed:Wait()
+                collapseBubble.Visible=false
+            else
+                collapseBubble.Visible=true
+                collapseBubble.Size=UDim2.fromOffset(10,10)
+                collapseBubble.BackgroundTransparency=1
+                collapseStroke.Transparency=1
+                collapseLogo.ImageTransparency=1
+                -- центр считаем по ФИНАЛЬНОМУ размеру кружка (54x54), а не по
+                -- временному стартовому (10x10) — иначе вспышка окажется не на месте
+                pulseGlow(Vector2.new(collapseBubble.AbsolutePosition.X+27, collapseBubble.AbsolutePosition.Y+27), 10, 100, .5)
+                TweenService:Create(collapseBubble,TweenInfo.new(.4,Enum.EasingStyle.Back,Enum.EasingDirection.Out),
+                    {Size=UDim2.fromOffset(54,54), BackgroundTransparency=0}):Play()
+                TweenService:Create(collapseStroke,TweenInfo.new(.4,Enum.EasingStyle.Quad,Enum.EasingDirection.Out),{Transparency=.1}):Play()
+                TweenService:Create(collapseLogo,TweenInfo.new(.4,Enum.EasingStyle.Quad,Enum.EasingDirection.Out),{ImageTransparency=0}):Play()
+                playsfx("open")
+            end
+            return
+        end
+        if screenGui.Enabled then
+            -- зелёная вспышка размером с менюшку, растёт из левого верхнего угла окна
+            pulseGlowRect(Vector2.new(window.AbsolutePosition.X, window.AbsolutePosition.Y), Vector2.new(0,0), window.AbsoluteSize.X, window.AbsoluteSize.Y, .6)
+            local t=TweenService:Create(window,TweenInfo.new(.55,Enum.EasingStyle.Quint,Enum.EasingDirection.In),
+             {Size=UDim2.new(MENU_SIZE.x,0,0,0),Position=UDim2.new(MENU_POS.x,0,MENU_POS.y+.1,0)})
+            t:Play(); t.Completed:Wait(); screenGui.Enabled=false
+            UserInputService.MouseIconEnabled=true; cur.inside=false; if cur.frame then cur.frame.Visible=false end
+        else
+            local tgt
+            if isMin then
+                -- minimized takes visual priority; width matches whatever
+                -- state (maximized or normal) it was minimized from
+                szLim.MinSize=Vector2.new(fullMin.X,30)
+                local w = isMaxed and screenGui.AbsoluteSize.X or fullSize.X.Offset
+                tgt = UDim2.fromOffset(w,30)
+            elseif isMaxed then
+                local sz = screenGui.AbsoluteSize
+                szLim.MaxSize=Vector2.new(math.huge,math.huge)
+                szLim.MinSize=fullMin
+                tgt = UDim2.fromOffset(sz.X, sz.Y)
+            else
+                szLim.MinSize=fullMin
+                tgt = fullSize
+            end
+            screenGui.Enabled=true
+            window.Size=UDim2.new(MENU_SIZE.x,0,0,0); window.Position=UDim2.new(MENU_POS.x,0,MENU_POS.y+.1,0)
+            -- зелёная вспышка размером с менюшку в момент открытия по RightShift
+            -- считаем центр по ФИНАЛЬНОЙ позиции/размеру окна, а не по текущему (схлопнутому в полоску) состоянию
+            local finalPos = (isMaxed and not isMin) and UDim2.fromOffset(0,0) or UDim2.new(MENU_POS.x,0,MENU_POS.y,0)
+            local tgtW = tgt.X.Scale * screenGui.AbsoluteSize.X + tgt.X.Offset
+            local tgtH = tgt.Y.Scale * screenGui.AbsoluteSize.Y + tgt.Y.Offset
+            local finalX = finalPos.X.Scale * screenGui.AbsoluteSize.X + finalPos.X.Offset
+            local finalY = finalPos.Y.Scale * screenGui.AbsoluteSize.Y + finalPos.Y.Offset
+            pulseGlowRect(Vector2.new(finalX, finalY), Vector2.new(0,0), tgtW, tgtH, .7)
+            TweenService:Create(window,TweenInfo.new(.75,Enum.EasingStyle.Quint,Enum.EasingDirection.Out),
+                {Size=tgt,Position=finalPos}):Play()
+            playsfx("open")
+        end
+        return
+    end
+    if waitingBind then
+        local newKey = (input.KeyCode==Enum.KeyCode.Escape or input.KeyCode==Enum.KeyCode.Backspace) and nil or input.KeyCode
+        if waitingBind.isRebindOnly and waitingBind.setKey then
+            waitingBind.setKey(newKey)
+        else
+            waitingBind.keyCode=newKey
+            waitingBind.button.Text=newKey and newKey.Name or "None"
+        end
+        waitingBind=nil; return
+    end
+    if proc then return end
+    for _,b in ipairs(keybinds) do if not b.isRebindOnly and b.keyCode==input.KeyCode and b.setActive then b.setActive(not b.active) end end
+end))
+
+-- ===================== [CROSSPLATFORM] MOBILE BUTTON =====================
+;(function()
+if UserInputService.TouchEnabled then
+    local mobileToggleBtn = Instance.new("TextButton", screenGui)
+    mobileToggleBtn.Name = "DyserMobileToggle"
+    mobileToggleBtn.Size = UDim2.fromOffset(50, 50)
+    mobileToggleBtn.Position = UDim2.new(0, 15, 0, 120) 
+    mobileToggleBtn.BackgroundColor3 = COLORS.panel2
+    mobileToggleBtn.Text = MENU_NAME
+    mobileToggleBtn.TextColor3 = COLORS.accent
+    mobileToggleBtn.Font = FONTS.bold
+    mobileToggleBtn.TextSize = 11
+    mobileToggleBtn.ZIndex = 10005
+    mobileToggleBtn.Active = true
+    
+    local btnCorner = Instance.new("UICorner", mobileToggleBtn)
+    btnCorner.CornerRadius = UDim.new(0, 10)
+    
+    local btnStroke = Instance.new("UIStroke", mobileToggleBtn)
+    btnStroke.Color = COLORS.accent
+    btnStroke.Thickness = 1.5
+    btnStroke.Transparency = 0.2
+    
+    table.insert(Acc.texts, mobileToggleBtn)
+    table.insert(Acc.strokes, btnStroke)
+    
+    local draggingBtn, dragBtnInput, dragBtnStart, startBtnPos
+    mobileToggleBtn.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
+            draggingBtn = true; dragBtnStart = input.Position; startBtnPos = mobileToggleBtn.Position
+            input.Changed:Connect(function() if input.UserInputState == Enum.UserInputState.End then draggingBtn = false end end)
+        end
+    end)
+    
+    mobileToggleBtn.InputChanged:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseMovement then dragBtnInput = input end
+    end)
+    
+    UserInputService.InputChanged:Connect(function(input)
+        if input == dragBtnInput and draggingBtn then
+            local delta = input.Position - dragBtnStart
+            mobileToggleBtn.Position = UDim2.new(startBtnPos.X.Scale, startBtnPos.X.Offset + delta.X, startBtnPos.Y.Scale, startBtnPos.Y.Offset + delta.Y)
+        end
+    end)
+
+    mobileToggleBtn.MouseButton1Click:Connect(function()
+        if not screenGui or not screenGui.Parent then return end
+        if not canToggle() then return end
+        if screenGui.Enabled then
+            -- зелёная вспышка размером с менюшку в момент закрытия (мобильная кнопка)
+            pulseGlowRect(Vector2.new(window.AbsolutePosition.X, window.AbsolutePosition.Y), Vector2.new(0,0), window.AbsoluteSize.X, window.AbsoluteSize.Y, .6)
+            local t=TweenService:Create(window,TweenInfo.new(.55,Enum.EasingStyle.Quint,Enum.EasingDirection.In),
+             {Size=UDim2.new(MENU_SIZE.x,0,0,0),Position=UDim2.new(MENU_POS.x,0,MENU_POS.y+.1,0)})
+            t:Play(); t.Completed:Wait(); screenGui.Enabled=false
+            UserInputService.MouseIconEnabled=true; cur.inside=false; if cur.frame then cur.frame.Visible=false end
+        else
+            local tgt
+            if isMaxed then
+                local sz = screenGui.AbsoluteSize
+                szLim.MaxSize=Vector2.new(math.huge,math.huge)
+                szLim.MinSize=fullMin
+                tgt = UDim2.fromOffset(sz.X, sz.Y)
+            elseif isMin then
+                szLim.MinSize=Vector2.new(fullMin.X,30)
+                tgt = UDim2.new(fullSize.X.Scale,fullSize.X.Offset,0,30)
+            else
+                szLim.MinSize=fullMin
+                tgt = fullSize
+            end
+            screenGui.Enabled=true
+            window.Size=UDim2.new(MENU_SIZE.x,0,0,0); window.Position=UDim2.new(MENU_POS.x,0,MENU_POS.y+.1,0)
+            -- зелёная вспышка размером с менюшку в момент открытия (мобильная кнопка)
+            local finalPos = isMaxed and UDim2.fromOffset(0,0) or UDim2.new(MENU_POS.x,0,MENU_POS.y,0)
+            local tgtW = tgt.X.Scale * screenGui.AbsoluteSize.X + tgt.X.Offset
+            local tgtH = tgt.Y.Scale * screenGui.AbsoluteSize.Y + tgt.Y.Offset
+            local finalX = finalPos.X.Scale * screenGui.AbsoluteSize.X + finalPos.X.Offset
+            local finalY = finalPos.Y.Scale * screenGui.AbsoluteSize.Y + finalPos.Y.Offset
+            pulseGlowRect(Vector2.new(finalX, finalY), Vector2.new(0,0), tgtW, tgtH, .7)
+            TweenService:Create(window,TweenInfo.new(.75,Enum.EasingStyle.Quint,Enum.EasingDirection.Out),
+                {Size=tgt,Position=finalPos}):Play()
+            playsfx("open")
+        end
+    end)
+end
+end)()
+
+-- ===================== STARTUP =====================
+spawn(function()
+    local notif=Instance.new("Frame",screenGui)
+    notif.Size=UDim2.fromOffset(250,60); notif.Position=UDim2.new(1,-260,0,20)
+    notif.BackgroundColor3=COLORS.panel2; notif.BackgroundTransparency=1; corner(notif,8)
+    Track.Stroke(stroke(notif,COLORS.accent,1,0))
+    gradient(notif,Color3.fromRGB(20,20,21),Color3.fromRGB(5,5,5),90)
+    local tl=Instance.new("Frame",notif); tl.Size=UDim2.new(1,0,0,2); tl.BackgroundColor3=COLORS.accentDk; tl.BorderSizePixel=0
+    local nt=label(notif,"TextLabel",{Size=UDim2.new(1,0,1,-8),Text="Loading "..MENU_NAME,TextSize=18,Font=Enum.Font.GothamBold,TextXAlignment=Enum.TextXAlignment.Center,TextTransparency=1})
+    pad(nt,0,0,2)
+    local pbg=Instance.new("Frame",notif); pbg.Size=UDim2.new(1,-10,0,4); pbg.Position=UDim2.fromOffset(5,52); pbg.BackgroundColor3=Color3.fromRGB(30,30,30); pbg.BorderSizePixel=0; corner(pbg,2)
+    local pf=Instance.new("Frame",pbg); pf.Size=UDim2.new(1,0,1,0); pf.BackgroundColor3=COLORS.accent; pf.BorderSizePixel=0; corner(pf,2)
+    TweenService:Create(notif,TweenInfo.new(.4,Enum.EasingStyle.Back,Enum.EasingDirection.Out),{BackgroundTransparency=0}):Play()
+    TweenService:Create(nt,TweenInfo.new(.4,Enum.EasingStyle.Back,Enum.EasingDirection.Out),{TextTransparency=0}):Play()
+    TweenService:Create(pf,TweenInfo.new(2.5,Enum.EasingStyle.Linear),{Size=UDim2.new(0,0,1,0)}):Play()
+    task.wait(2.5)
+    local a=TweenService:Create(notif,TweenInfo.new(.4,Enum.EasingStyle.Back,Enum.EasingDirection.In),{BackgroundTransparency=1,Position=UDim2.new(1,-260,0,-70)})
+    TweenService:Create(nt,TweenInfo.new(.4),{TextTransparency=1}):Play(); a:Play(); a.Completed:Wait(); notif:Destroy()
+    
+    local tgt
+    if isMaxed then
+        local sz = screenGui.AbsoluteSize
+        szLim.MaxSize=Vector2.new(math.huge,math.huge)
+        szLim.MinSize=fullMin; body.Visible=true
+        tgt = UDim2.fromOffset(sz.X, sz.Y)
+    elseif isMin then
+        szLim.MinSize=Vector2.new(fullMin.X,30)
+        tgt = UDim2.new(fullSize.X.Scale,fullSize.X.Offset,0,30)
+    else
+        szLim.MinSize=fullMin; body.Visible=true
+        tgt = fullSize
+    end
+    window.Visible=true
+    window.Size=UDim2.new(MENU_SIZE.x,0,0,0); window.Position=UDim2.new(MENU_POS.x,0,MENU_POS.y+.1,0)
+    TweenService:Create(window,TweenInfo.new(.55,Enum.EasingStyle.Quint,Enum.EasingDirection.Out), {Size=tgt,Position=isMaxed and UDim2.fromOffset(0,0) or UDim2.new(MENU_POS.x,0,MENU_POS.y,0)}):Play()
+    playsfx("open")
+    AddLog(MENU_NAME.." loaded!", COLORS.accent)
+
+    task.wait(0.9)
+    if not screenGui or not screenGui.Parent then return end
+    local DS_LINK = "https://discord.gg/wy4BwVb8DC"
+    local dn = Instance.new("Frame", screenGui)
+    dn.Size = UDim2.fromOffset(268, 70); dn.Position = UDim2.new(1,-278, 1, 20)
+    dn.BackgroundColor3 = Color3.fromRGB(30,33,36); dn.BackgroundTransparency = 0; dn.BorderSizePixel = 0; dn.ZIndex = 50
+    corner(dn, 10)
+    local dnStr = Instance.new("UIStroke", dn); dnStr.Color = Color3.fromRGB(88,101,242); dnStr.Thickness = 1; dnStr.Transparency = 0
+    local dnTop = Instance.new("Frame", dn); dnTop.Size = UDim2.new(1,0,0,3); dnTop.BackgroundColor3 = Color3.fromRGB(88,101,242); dnTop.BorderSizePixel = 0; corner(dnTop, 2); dnTop.ZIndex = 51
+    local dnIco = Instance.new("TextLabel", dn); dnIco.Position = UDim2.fromOffset(10,10); dnIco.Size = UDim2.fromOffset(30,30); dnIco.BackgroundTransparency = 1; dnIco.Text = "💬"; dnIco.TextSize = 22; dnIco.Font = Enum.Font.GothamBold; dnIco.ZIndex = 51
+    local dnTitle = Instance.new("TextLabel", dn); dnTitle.Position = UDim2.fromOffset(46,8); dnTitle.Size = UDim2.new(1,-68,0,18); dnTitle.BackgroundTransparency = 1; dnTitle.Text = "Join our Discord!"; dnTitle.TextSize = 12; dnTitle.Font = Enum.Font.GothamBold; dnTitle.TextColor3 = Color3.fromRGB(255,255,255); dnTitle.TextXAlignment = Enum.TextXAlignment.Left; dnTitle.ZIndex = 51
+    local dnUrl = Instance.new("TextLabel", dn); dnUrl.Position = UDim2.fromOffset(46,26); dnUrl.Size = UDim2.new(1,-68,0,14); dnUrl.BackgroundTransparency = 1; dnUrl.Text = "discord.gg/wy4BwVb8DC"; dnUrl.TextSize = 10; dnUrl.Font = Enum.Font.Code; dnUrl.TextColor3 = Color3.fromRGB(88,101,242); dnUrl.TextXAlignment = Enum.TextXAlignment.Left; dnUrl.ZIndex = 51
+    local dnJoin = Instance.new("TextButton", dn); dnJoin.Position = UDim2.fromOffset(46,44); dnJoin.Size = UDim2.fromOffset(56,20); dnJoin.BackgroundColor3 = Color3.fromRGB(88,101,242); dnJoin.BorderSizePixel = 0; dnJoin.Text = "Join"; dnJoin.TextSize = 11; dnJoin.Font = Enum.Font.GothamBold; dnJoin.TextColor3 = Color3.fromRGB(255,255,255); dnJoin.AutoButtonColor = false; dnJoin.ZIndex = 52; corner(dnJoin, 4)
+    local dnX = Instance.new("TextButton", dn); dnX.AnchorPoint = Vector2.new(1,0); dnX.Position = UDim2.new(1,-5,0,5); dnX.Size = UDim2.fromOffset(18,18); dnX.BackgroundTransparency = 1; dnX.Text = "✕"; dnX.TextSize = 11; dnX.Font = Enum.Font.GothamBold; dnX.TextColor3 = Color3.fromRGB(140,140,145); dnX.AutoButtonColor = false; dnX.ZIndex = 52
+    
+    local function closeDn()
+        TweenService:Create(dn, TweenInfo.new(.25, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {Position=UDim2.new(1,-278,1,20)}):Play()
+        task.delay(.25, function() if dn and dn.Parent then dn:Destroy() end end)
+    end
+    dnJoin.MouseEnter:Connect(function() TweenService:Create(dnJoin,TweenInfo.new(.1),{BackgroundColor3=Color3.fromRGB(110,125,255)}):Play() end)
+    dnJoin.MouseLeave:Connect(function() TweenService:Create(dnJoin,TweenInfo.new(.1),{BackgroundColor3=Color3.fromRGB(88,101,242)}):Play() end)
+    dnJoin.MouseButton1Click:Connect(function()
+        if setclipboard then setclipboard(DS_LINK) end
+        dnJoin.Text = "Copied!"; dnJoin.BackgroundColor3 = Color3.fromRGB(46,204,113)
+        task.delay(2, function() if dnJoin and dnJoin.Parent then dnJoin.Text="Join"; dnJoin.BackgroundColor3=Color3.fromRGB(88,101,242) end end)
+    end)
+    dnX.MouseButton1Click:Connect(closeDn)
+    TweenService:Create(dn, TweenInfo.new(.4, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {Position=UDim2.new(1,-278, 1,-80)}):Play()
+    task.delay(8, function() if dn and dn.Parent then closeDn() end end)
+end)
+
+
+-- ===================== PUBLIC API =====================
+-- Это публичный интерфейс библиотеки — возвращается наружу через loadstring(...)()
+-- Пример использования:
+--   local Dyser = loadstring(game:HttpGet(URL))()
+--   local Win   = Dyser:GetWindow()
+--   local Tab   = Win:AddTopTab("Combat")
+--   local Side  = Tab:AddSideTab("Aimbot")
+--   Side:AddSection("Settings")
+--   Side:AddToggle({ Text = "Silent Aim", Callback = function(v) end })
+--   Side:AddButton({ Text = "Teleport", Callback = function() end })
+--   Side:AddSlider({ Text = "FOV", Min = 1, Max = 360, Default = 90, Callback = function(v) end })
+--   Side:AddInput({ Text = "Name", Default = "", Callback = function(v) end })
+--   Side:AddKeybind({ Text = "Macro", Default = Enum.KeyCode.F, Callback = function(v) end })
+--   Side:AddColorPicker({ Text = "Color", Default = Color3.fromRGB(255,0,0), Callback = function(c) end })
+--   Dyser:AddLog("Hello!", Color3.fromRGB(70,230,120))
+--   Dyser:SetAccent(Color3.fromRGB(255,100,0))
+
+-- ── Вспомогательная функция: создаёт новую верхнюю вкладку с ОТДЕЛЬНОЙ боковой панелью
+-- Каждая верхняя вкладка через API получает свою собственную боковую панель (изолированно
+-- от системных вкладок Main/Profiles/Theme и друг от друга).
+
+local function createTopTabBtn(name)
+    local btn = label(topTabsFrame, "TextButton", {
+        Size      = UDim2.fromOffset(56, 22),
+        BackgroundTransparency = 0,
+        BackgroundColor3 = Color3.fromRGB(8,8,9),
+        Text = "", TextSize = TSIZES.tab, Font = FONTS.bold,
+        AutoButtonColor = false, Category = "TopTabs",
+    })
+    corner(btn, 3); stroke(btn, COLORS.lineLight, 1, .25); bubble(btn, 6, true)
+    local lbl2 = label(btn, "TextLabel", {
+        Size = UDim2.new(1,0,1,0), Text = name, TextSize = TSIZES.tab,
+        Font = FONTS.bold, TextXAlignment = Enum.TextXAlignment.Center,
+        TextColor3 = COLORS.text, Category = "TopTabs",
+    })
+    lbl2.ZIndex = 10
+    regSearch(name, name, btn)
+    bindCursorHover(btn)
+    local sc = Instance.new("UIScale", btn)
+    btn.MouseEnter:Connect(function()
+        TweenService:Create(sc, TweenInfo.new(.15), {Scale=1.05}):Play()
+        if btn ~= Nav.selectedTop then TweenService:Create(btn, TweenInfo.new(.15), {BackgroundColor3=Color3.fromRGB(15,15,16)}):Play() end
+    end)
+    btn.MouseLeave:Connect(function()
+        TweenService:Create(sc, TweenInfo.new(.15), {Scale=1}):Play()
+        if btn ~= Nav.selectedTop then TweenService:Create(btn, TweenInfo.new(.15), {BackgroundColor3=Color3.fromRGB(8,8,9)}):Play() end
+    end)
+
+    -- Создаём отдельную боковую панель для этой верхней вкладки
+    -- она живёт поверх системного sidePanel и показывается только когда активна эта вкладка
+    local apiPanel = Instance.new("ScrollingFrame", body)
+    apiPanel.Name = name.."_SidePanel"
+    apiPanel.Size = UDim2.new(0, SIZES.sideW, 1, 0)
+    apiPanel.BorderSizePixel = 0
+    apiPanel.ScrollingDirection = Enum.ScrollingDirection.Y
+    apiPanel.ScrollBarThickness = 3
+    apiPanel.CanvasSize = UDim2.fromOffset(0,0)
+    apiPanel.AutomaticCanvasSize = Enum.AutomaticSize.Y
+    apiPanel.Visible = false
+    apiPanel.ZIndex = 6
+    Track.Scrollbar(apiPanel)
+    Track.PanelBG(apiPanel)
+    pad(apiPanel, 5, 5, 8, 0)
+    local apiLL = Instance.new("UIListLayout", apiPanel)
+    apiLL.Padding = UDim.new(0, 6); apiLL.SortOrder = Enum.SortOrder.LayoutOrder
+
+    -- Отдельный leftPane (контейнер страниц) для этой верхней вкладки
+    local apiLeftPane = Instance.new("Frame", contentZone)
+    apiLeftPane.Name = name.."_LeftPane"
+    apiLeftPane.Size = UDim2.new(0, 408, 1, 0)
+    apiLeftPane.BorderSizePixel = 0
+    apiLeftPane.ClipsDescendants = true
+    apiLeftPane.Visible = false
+    Track.WindowBG(apiLeftPane)
+
+    apiSidePanels[name] = {
+        panel = apiPanel,
+        leftPane = apiLeftPane,
+        sideButtons = {},
+        selectedSide = nil,
+    }
+
+    Nav.topToSide[name] = {}
+    table.insert(Nav.topTabBtns, {button=btn, label=lbl2, name=name})
+
+    btn.MouseButton1Click:Connect(function()
+        playsfx("click")
+        -- скрываем системную боковую панель и все API-панели
+        sidePanel.Visible = false
+        leftPane.Visible  = false
+        for n, data in pairs(apiSidePanels) do
+            data.panel.Visible    = false
+            data.leftPane.Visible = false
+        end
+        -- показываем свою
+        apiPanel.Visible    = true
+        apiLeftPane.Visible = true
+        -- подсвечиваем верхнюю кнопку
+        for _, e in ipairs(Nav.topTabBtns) do
+            e.button.BackgroundColor3 = Color3.fromRGB(8,8,9)
+            if e.label then e.label.TextColor3 = COLORS.text end
+        end
+        Nav.selectedTop = btn
+        btn.BackgroundColor3 = COLORS.accent
+        lbl2.TextColor3 = COLORS.white
+        -- скрываем системный bottomBtn (он только для "Main")
+        if Nav.sideBottomBtn then Nav.sideBottomBtn.Visible = false end
+        -- активируем первую боковую кнопку этой вкладки
+        local data = apiSidePanels[name]
+        if data and data.sideButtons[1] then
+            local first = data.sideButtons[1]
+            first.btn.BackgroundColor3 = COLORS.accent
+            if data.selectedSide then data.selectedSide.Visible = false end
+            first.page.Visible = true
+            data.selectedSide = first.page
+            settingsPage = first.page
+        end
+    end)
+
+    return btn
+end
+
+-- ── Создаёт боковую вкладку внутри конкретной верхней вкладки (изолированно)
+local function createSideTabEntry(topName, sideName)
+    local data = apiSidePanels[topName]
+    if not data then return Instance.new("ScrollingFrame") end
+
+    local btn = label(data.panel, "TextButton", {
+        Size = UDim2.new(1, 0, 0, SIZES.rowH),
+        BackgroundColor3 = Color3.fromRGB(17,17,18),
+        Text = "", Font = Enum.Font.Gotham,
+        AutoButtonColor = false, TextColor3 = COLORS.white,
+    })
+    corner(btn, 4)
+    stroke(btn, COLORS.lineLight, 1, .2)
+    local activeStroke = stroke(btn, COLORS.accent, 1, 0); activeStroke.Transparency = 1
+    table.insert(Acc.strokes, activeStroke)
+    local gr = gradient(btn, Color3.fromRGB(23,23,24), Color3.fromRGB(9,9,10), 90)
+    bubble(btn, 8, true)
+    local lbl3 = label(btn, "TextLabel", {
+        Size = UDim2.new(1,0,1,0), Text = sideName,
+        TextSize = TSIZES.sideTab, Font = Enum.Font.Gotham,
+        TextXAlignment = Enum.TextXAlignment.Center, TextColor3 = COLORS.text,
+    })
+    lbl3.TextScaled = true; lbl3.ZIndex = 10; pad(lbl3, 4, 4)
+    bindCursorHover(btn)
+    local uiSc = Instance.new("UIScale", btn)
+    btn.MouseEnter:Connect(function() TweenService:Create(uiSc, TweenInfo.new(.15), {Scale=1.02}):Play() end)
+    btn.MouseLeave:Connect(function() TweenService:Create(uiSc, TweenInfo.new(.15), {Scale=1}):Play() end)
+
+    -- Страница контента — живёт в отдельном leftPane этой верхней вкладки
+    local page = Instance.new("ScrollingFrame", data.leftPane)
+    page.Name = sideName.."Page"
+    page.Size = UDim2.new(1, 0, 1, 0)
+    page.BorderSizePixel = 0
+    Track.WindowBG(page)
+    page.ScrollBarThickness = 3; Track.Scrollbar(page)
+    page.CanvasSize = UDim2.fromOffset(0,0); page.AutomaticCanvasSize = Enum.AutomaticSize.Y
+    page.Visible = false; pad(page, 6, 2, 2)
+    local pLL = Instance.new("UIListLayout", page)
+    pLL.SortOrder = Enum.SortOrder.LayoutOrder; pLL.Padding = UDim.new(0,0)
+
+    local entry = {btn = btn, page = page, name = sideName}
+    table.insert(data.sideButtons, entry)
+
+    -- если это первая боковая кнопка — показываем её сразу (при активации верхней вкладки)
+    if #data.sideButtons == 1 then
+        btn.BackgroundColor3 = COLORS.accent
+    end
+
+    btn.MouseButton1Click:Connect(function()
+        playsfx("click")
+        -- скрываем все страницы этой верхней вкладки, показываем выбранную
+        for _, e in ipairs(data.sideButtons) do
+            e.btn.BackgroundColor3 = Color3.fromRGB(17,17,18)
+            e.page.Visible = false
+        end
+        btn.BackgroundColor3 = COLORS.accent
+        page.Visible = true
+        data.selectedSide = page
+        settingsPage = page
+    end)
+
+    return page
+end
+
+-- ── SideTab объект — то, через что пользователь добавляет элементы
+local function makeSideTabAPI(page, sideName)
+    local api = {}
+
+    -- перед каждым вызовом builder-функции нужно переключить settingsPage на нужную страницу
+    local function withPage(fn)
+        local prev = settingsPage
+        settingsPage = page
+        curSection = nil
+        fn()
+        settingsPage = prev
+    end
+
+    function api:AddSection(txt)
+        withPage(function() addSection(txt, sideName) end)
+        return self
+    end
+
+    function api:AddToggle(opts)
+        -- opts: { Text, Default, Callback }
+        withPage(function()
+            local cb = opts.Callback
+            addToggle(opts.Text or "Toggle", cb)
+            -- применяем значение по умолчанию через toggleSetters
+            if opts.Default and Nav.ipairts then end
+            local key = opts.Text or "Toggle"
+            if opts.Default ~= nil and toggleSet and toggleSet[key] then
+                toggleSet[key](opts.Default)
+            end
+        end)
+        return self
+    end
+
+    function api:AddButton(opts)
+        -- opts: { Text, Callback, DoubleClick }
+        withPage(function() addButton(opts.Text or "Button", opts.Callback) end)
+        return self
+    end
+
+    function api:AddSlider(opts)
+        -- opts: { Text, Min, Max, Default, Callback }
+        local min  = opts.Min     or 0
+        local max  = opts.Max     or 100
+        local def  = opts.Default or min
+        local scale = (max - min) > 0 and (def - min) / (max - min) or 0
+        withPage(function() addSlider(opts.Text or "Slider", def, scale, opts.Callback) end)
+        return self
+    end
+
+    function api:AddInput(opts)
+        -- opts: { Text, Default, Callback }
+        withPage(function() addInput(opts.Text or "Input", opts.Default or "", opts.Callback) end)
+        return self
+    end
+
+    function api:AddKeybind(opts)
+        -- opts: { Text, Default, Callback }
+        withPage(function() addKeybind(opts.Text or "Keybind", opts.Default, opts.Callback) end)
+        return self
+    end
+
+    function api:AddColorPicker(opts)
+        -- opts: { Text, Default, Callback }
+        withPage(function() addColorPicker(opts.Text or "Color", opts.Default or Color3.fromRGB(255,255,255), opts.Callback) end)
+        return self
+    end
+
+    -- доступ к самому ScrollingFrame если нужен для кастомного кода
+    function api:GetPage() return page end
+
+    return api
+end
+
+-- ── TopTab объект
+local function makeTopTabAPI(topName)
+    local api = {}
+
+    function api:AddSideTab(sideName)
+        local page = createSideTabEntry(topName, sideName)
+        return makeSideTabAPI(page, sideName)
+    end
+
+    function api:GetName() return topName end
+
+    return api
+end
+
+-- ── Главный объект Window
+local WindowAPI = {}
+
+function WindowAPI:AddTopTab(name)
+    createTopTabBtn(name)
+    return makeTopTabAPI(name)
+end
+
+-- Переключиться на нужную верхнюю вкладку программно
+function WindowAPI:SelectTopTab(name)
+    for _, e in ipairs(Nav.topTabBtns) do
+        if e.name == name then selectTop(e.button, name); break end
+    end
+end
+
+-- Переключиться на нужную боковую вкладку программно
+function WindowAPI:SelectSideTab(name)
+    for _, e in ipairs(Nav.sideButtons) do
+        if e.name == name then selectSide(e.button, e.gradient, name, e.page); break end
+    end
+end
+
+-- ── Корневой объект библиотеки
+local DyserLib = {}
+
+-- Получить объект окна (у нас одно окно, создаётся автоматически)
+function DyserLib:GetWindow()
+    return WindowAPI
+end
+
+-- Добавить лог снаружи
+function DyserLib:AddLog(text, color)
+    AddLog(text, color)
+end
+
+-- Сменить акцентный цвет снаружи
+function DyserLib:SetAccent(color)
+    setAccent(color)
+end
+
+-- Сменить фон окна
+function DyserLib:SetWindowBG(color)
+    if setWindowBackground then setWindowBackground(color) end
+end
+
+-- Включить/выключить звуки
+function DyserLib:SetSoundEnabled(state)
+    sfxEnabled = state
+end
+
+-- Прочитать/записать состояние тоглов (для интеграции с конфигами)
+function DyserLib:SetToggle(name, value)
+    if toggleSet and toggleSet[name] then toggleSet[name](value) end
+end
+
+function DyserLib:GetToggleState(name)
+    return menuState and menuState.toggles and menuState.toggles[name]
+end
+
+function DyserLib:SetSlider(name, value)
+    if sliderSet and sliderSet[name] then sliderSet[name](value) end
+end
+
+-- Возвращаем таблицу наружу — это то, что получает пользователь через loadstring(...)()
+return DyserLib
+
+end -- end of __init
+
+-- Запускаем и возвращаем Library наружу
+return __init()
