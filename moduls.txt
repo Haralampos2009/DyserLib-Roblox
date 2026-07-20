@@ -27,10 +27,8 @@ local MENU_NAME    = "Dyser"
 local TOGGLE_KEY   = Enum.KeyCode.RightShift
 
 -- Top tabs -> side tabs included in them
-local TOP_TABS = {
-    { name = "Main",     side = {} },
-}
-local SIDE_TABS  = {} -- Side tabs removed
+local TOP_TABS = {}  -- верхние вкладки добавляются через API во втором модуле
+local SIDE_TABS  = {} -- боковые вкладки добавляются через API во втором модуле
 local RIGHT_TABS = { "Info", "Settings", "History", "Themes", "Cursor" }
 
 local COLORS = {
