@@ -813,28 +813,27 @@ for i,t in ipairs(TOP_TABS) do
     local lbl2=label(btn,"TextLabel",{Size=UDim2.new(1,0,1,0),Text=t.name,TextSize=TSIZES.tab,Font=FONTS.bold,
         TextXAlignment=Enum.TextXAlignment.Center,TextColor3=i==1 and COLORS.white or COLORS.text, Category="TopTabs"})
     lbl2.ZIndex=10
-    
+
     regSearch(t.name, t.name, btn)
     bindCursorHover(btn)
-    
-    local uiScaleBtn = Instance.new("UIScale", btn)
+
     btn.MouseEnter:Connect(function()
-        TweenService:Create(uiScaleBtn,TweenInfo.new(.15),{Scale=1.05}):Play()
         if btn ~= Nav.selectedTop then
-            TweenService:Create(btn,TweenInfo.new(.15),{BackgroundColor3=Color3.fromRGB(15,15,16)}):Play()
+            TweenService:Create(btn,TweenInfo.new(.15),{BackgroundColor3=Color3.fromRGB(22,22,24)}):Play()
+            TweenService:Create(lbl2,TweenInfo.new(.15),{TextColor3=COLORS.white}):Play()
         end
     end)
     btn.MouseLeave:Connect(function()
-        TweenService:Create(uiScaleBtn,TweenInfo.new(.15),{Scale=1}):Play()
         if btn ~= Nav.selectedTop then
             TweenService:Create(btn,TweenInfo.new(.15),{BackgroundColor3=Color3.fromRGB(8,8,9)}):Play()
+            TweenService:Create(lbl2,TweenInfo.new(.15),{TextColor3=COLORS.text}):Play()
         end
     end)
-    
+
     table.insert(Nav.topTabBtns,{button=btn,label=lbl2,name=t.name})
-    btn.MouseButton1Click:Connect(function() 
+    btn.MouseButton1Click:Connect(function()
         playsfx("click")
-        selectTop(btn,t.name) 
+        selectTop(btn,t.name)
     end)
 end
 
@@ -1095,16 +1094,29 @@ searchBox.FocusLost:Connect(function(enter) if enter then doSearch(searchBox.Tex
 clearBtn.MouseButton1Click:Connect(function() playsfx("click"); searchBox.Text=""; searchBox.PlaceholderText="Search elements..."; clearHighlight(); clearBtn.Visible=false end)
 
 for i,name in ipairs(RIGHT_TABS) do
-    local btn=label(rTabCont,"TextButton",{Size=UDim2.fromOffset(70,19),BackgroundTransparency=0, BackgroundColor3=i==1 and COLORS.accent or Color3.fromRGB(8,8,9),Text="", TextSize=10,Font=FONTS.bold,AutoButtonColor=false})
+    local btn=label(rTabCont,"TextButton",{Size=UDim2.fromOffset(70,19),BackgroundTransparency=0,
+        BackgroundColor3=i==1 and COLORS.accent or Color3.fromRGB(8,8,9),Text="",
+        TextSize=10,Font=FONTS.bold,AutoButtonColor=false})
     corner(btn,3); stroke(btn,COLORS.lineLight,1,.25); bubble(btn,6,true)
-    local lbl4=label(btn,"TextLabel",{Size=UDim2.new(1,0,1,0),Text=name,TextSize=10,Font=FONTS.bold, TextXAlignment=Enum.TextXAlignment.Center,TextColor3=i==1 and COLORS.white or COLORS.text, Category="TopTabs"})
+    local lbl4=label(btn,"TextLabel",{Size=UDim2.new(1,0,1,0),Text=name,TextSize=10,Font=FONTS.bold,
+        TextXAlignment=Enum.TextXAlignment.Center,TextColor3=i==1 and COLORS.white or COLORS.text,
+        Category="TopTabs"})
     lbl4.ZIndex=10
-    
+
     bindCursorHover(btn)
-    local uiScaleRBtn = Instance.new("UIScale", btn)
-    btn.MouseEnter:Connect(function() TweenService:Create(uiScaleRBtn,TweenInfo.new(.15),{Scale=1.05}):Play(); if btn ~= Nav.selectedRight then TweenService:Create(btn,TweenInfo.new(.15),{BackgroundColor3=Color3.fromRGB(15,15,16)}):Play() end end)
-    btn.MouseLeave:Connect(function() TweenService:Create(uiScaleRBtn,TweenInfo.new(.15),{Scale=1}):Play(); if btn ~= Nav.selectedRight then TweenService:Create(btn,TweenInfo.new(.15),{BackgroundColor3=Color3.fromRGB(8,8,9)}):Play() end end)
-    
+    btn.MouseEnter:Connect(function()
+        if btn ~= Nav.selectedRight then
+            TweenService:Create(btn,TweenInfo.new(.15),{BackgroundColor3=Color3.fromRGB(22,22,24)}):Play()
+            TweenService:Create(lbl4,TweenInfo.new(.15),{TextColor3=COLORS.white}):Play()
+        end
+    end)
+    btn.MouseLeave:Connect(function()
+        if btn ~= Nav.selectedRight then
+            TweenService:Create(btn,TweenInfo.new(.15),{BackgroundColor3=Color3.fromRGB(8,8,9)}):Play()
+            TweenService:Create(lbl4,TweenInfo.new(.15),{TextColor3=COLORS.text}):Play()
+        end
+    end)
+
     table.insert(Nav.rightTabBtns,{button=btn,label=lbl4,name=name})
     regSearch(name, name, btn)
 
