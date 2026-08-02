@@ -873,6 +873,9 @@ Nav.sideBottomBtn.Size=UDim2.new(0,SIZES.sideW-10,0,SIZES.rowH)
 Nav.sideBottomBtn.BackgroundColor3=COLORS.accent
 Nav.sideBottomBtn.BorderSizePixel=0
 Nav.sideBottomBtn.Text=""; Nav.sideBottomBtn.AutoButtonColor=false
+Nav.sideBottomBtn.Visible=false -- скрыт по умолчанию: это системная кнопка для старой захардкоженной
+                                  -- вкладки "Main", которой больше нет — показывать нечего пока
+                                  -- явно не выбрана системная вкладка с таким именем
 corner(Nav.sideBottomBtn,4); Track.BG(Nav.sideBottomBtn); bubble(Nav.sideBottomBtn,8,true,nil,nil,true); bindCursorHover(Nav.sideBottomBtn)
 local sideBottomLbl=label(Nav.sideBottomBtn,"TextLabel",{Size=UDim2.new(1,0,1,0),Text="Main",TextSize=TSIZES.sideTab,Font=FONTS.bold,TextXAlignment=Enum.TextXAlignment.Center, Category="SideTabs"})
 sideBottomLbl.ZIndex=10
@@ -2663,7 +2666,7 @@ local function createTopTabBtn(name)
     Nav.topToSide[name] = {}
     table.insert(Nav.topTabBtns, {button=btn, label=lbl2, name=name})
 
-    btn.MouseButton1Click:Connect(function()
+    local function selectThisApiTab()
         playsfx("click")
         -- скрываем системную боковую панель и все API-панели
         sidePanel.Visible = false
@@ -2684,14 +2687,22 @@ local function createTopTabBtn(name)
         Nav.selectedTop = btn
         btn.BackgroundColor3 = COLORS.accent
         lbl2.TextColor3 = COLORS.white
-        -- скрываем системный bottomBtn (он только для "Main")
+        -- скрываем системный bottomBtn (он только для старой захардкоженной "Main")
         if Nav.sideBottomBtn then Nav.sideBottomBtn.Visible = false end
         -- активируем первую боковую кнопку этой вкладки (с подсветкой/свечением)
         local data = apiSidePanels[name]
         if data and data.sideButtons[1] then
             selectApiSideTab(data, data.sideButtons[1])
         end
-    end)
+    end
+
+    btn.MouseButton1Click:Connect(selectThisApiTab)
+
+    -- если это самая первая верхняя вкладка, добавленная через API — выбираем её
+    -- сразу же, чтобы меню при запуске открывалось не пустым, а уже на ней
+    if #Nav.topTabBtns == 1 and not Nav.selectedTop then
+        task.defer(selectThisApiTab)
+    end
 
     return btn
 end
