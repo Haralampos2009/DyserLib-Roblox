@@ -27,10 +27,8 @@ local MENU_NAME    = "Dyser"
 local TOGGLE_KEY   = Enum.KeyCode.RightShift
 
 -- Top tabs -> side tabs included in them
-local TOP_TABS = {
-    { name = "Main",     side = {} },
-}
-local SIDE_TABS  = {} -- Side tabs removed
+local TOP_TABS = {}  -- верхние вкладки добавляются через API во втором модуле
+local SIDE_TABS  = {} -- боковые вкладки добавляются через API во втором модуле
 local RIGHT_TABS = { "Info", "Settings", "History", "Themes", "Cursor" }
 
 local COLORS = {
@@ -114,6 +112,10 @@ local apiSidePanels = {}
 
 -- forward-объявления GUI-фреймов — создаются позже, но нужны в selectTop/selectSide выше
 local sidePanel, leftPane, contentZone, body
+
+-- ссылка на ТЕКУЩУЮ активную левую панель (системную или одну из API-панелей) —
+-- нужна чтобы стрелка "^"/">" сворачивала именно то, что сейчас видно, а не всегда системную leftPane
+local activeLeftPane
 
 -- (Nav.selectedTop/Nav.selectedSide/Nav.selectedRight/Nav.sideBottomBtn now live in Nav table above)
 local isMin = false -- forward declared; real minimize logic sets this below
@@ -813,28 +815,27 @@ for i,t in ipairs(TOP_TABS) do
     local lbl2=label(btn,"TextLabel",{Size=UDim2.new(1,0,1,0),Text=t.name,TextSize=TSIZES.tab,Font=FONTS.bold,
         TextXAlignment=Enum.TextXAlignment.Center,TextColor3=i==1 and COLORS.white or COLORS.text, Category="TopTabs"})
     lbl2.ZIndex=10
-    
+
     regSearch(t.name, t.name, btn)
     bindCursorHover(btn)
-    
-    local uiScaleBtn = Instance.new("UIScale", btn)
+
     btn.MouseEnter:Connect(function()
-        TweenService:Create(uiScaleBtn,TweenInfo.new(.15),{Scale=1.05}):Play()
         if btn ~= Nav.selectedTop then
-            TweenService:Create(btn,TweenInfo.new(.15),{BackgroundColor3=Color3.fromRGB(15,15,16)}):Play()
+            TweenService:Create(btn,TweenInfo.new(.15),{BackgroundColor3=Color3.fromRGB(22,22,24)}):Play()
+            TweenService:Create(lbl2,TweenInfo.new(.15),{TextColor3=COLORS.white}):Play()
         end
     end)
     btn.MouseLeave:Connect(function()
-        TweenService:Create(uiScaleBtn,TweenInfo.new(.15),{Scale=1}):Play()
         if btn ~= Nav.selectedTop then
             TweenService:Create(btn,TweenInfo.new(.15),{BackgroundColor3=Color3.fromRGB(8,8,9)}):Play()
+            TweenService:Create(lbl2,TweenInfo.new(.15),{TextColor3=COLORS.text}):Play()
         end
     end)
-    
+
     table.insert(Nav.topTabBtns,{button=btn,label=lbl2,name=t.name})
-    btn.MouseButton1Click:Connect(function() 
+    btn.MouseButton1Click:Connect(function()
         playsfx("click")
-        selectTop(btn,t.name) 
+        selectTop(btn,t.name)
     end)
 end
 
@@ -948,6 +949,7 @@ leftPane=Instance.new("Frame",contentZone)
 leftPane.Name="LeftPane"; leftPane.Size=UDim2.new(0,408,1,0)
 leftPane.BorderSizePixel=0; leftPane.ClipsDescendants=true
 Track.WindowBG(leftPane)
+activeLeftPane = leftPane -- по умолчанию активна системная левая панель
 
 local leftDivLine=Instance.new("Frame",contentZone)
 leftDivLine.Position=UDim2.fromOffset(408,0); leftDivLine.Size=UDim2.new(0,1,1,0)
@@ -1095,16 +1097,29 @@ searchBox.FocusLost:Connect(function(enter) if enter then doSearch(searchBox.Tex
 clearBtn.MouseButton1Click:Connect(function() playsfx("click"); searchBox.Text=""; searchBox.PlaceholderText="Search elements..."; clearHighlight(); clearBtn.Visible=false end)
 
 for i,name in ipairs(RIGHT_TABS) do
-    local btn=label(rTabCont,"TextButton",{Size=UDim2.fromOffset(70,19),BackgroundTransparency=0, BackgroundColor3=i==1 and COLORS.accent or Color3.fromRGB(8,8,9),Text="", TextSize=10,Font=FONTS.bold,AutoButtonColor=false})
+    local btn=label(rTabCont,"TextButton",{Size=UDim2.fromOffset(70,19),BackgroundTransparency=0,
+        BackgroundColor3=i==1 and COLORS.accent or Color3.fromRGB(8,8,9),Text="",
+        TextSize=10,Font=FONTS.bold,AutoButtonColor=false})
     corner(btn,3); stroke(btn,COLORS.lineLight,1,.25); bubble(btn,6,true)
-    local lbl4=label(btn,"TextLabel",{Size=UDim2.new(1,0,1,0),Text=name,TextSize=10,Font=FONTS.bold, TextXAlignment=Enum.TextXAlignment.Center,TextColor3=i==1 and COLORS.white or COLORS.text, Category="TopTabs"})
+    local lbl4=label(btn,"TextLabel",{Size=UDim2.new(1,0,1,0),Text=name,TextSize=10,Font=FONTS.bold,
+        TextXAlignment=Enum.TextXAlignment.Center,TextColor3=i==1 and COLORS.white or COLORS.text,
+        Category="TopTabs"})
     lbl4.ZIndex=10
-    
+
     bindCursorHover(btn)
-    local uiScaleRBtn = Instance.new("UIScale", btn)
-    btn.MouseEnter:Connect(function() TweenService:Create(uiScaleRBtn,TweenInfo.new(.15),{Scale=1.05}):Play(); if btn ~= Nav.selectedRight then TweenService:Create(btn,TweenInfo.new(.15),{BackgroundColor3=Color3.fromRGB(15,15,16)}):Play() end end)
-    btn.MouseLeave:Connect(function() TweenService:Create(uiScaleRBtn,TweenInfo.new(.15),{Scale=1}):Play(); if btn ~= Nav.selectedRight then TweenService:Create(btn,TweenInfo.new(.15),{BackgroundColor3=Color3.fromRGB(8,8,9)}):Play() end end)
-    
+    btn.MouseEnter:Connect(function()
+        if btn ~= Nav.selectedRight then
+            TweenService:Create(btn,TweenInfo.new(.15),{BackgroundColor3=Color3.fromRGB(22,22,24)}):Play()
+            TweenService:Create(lbl4,TweenInfo.new(.15),{TextColor3=COLORS.white}):Play()
+        end
+    end)
+    btn.MouseLeave:Connect(function()
+        if btn ~= Nav.selectedRight then
+            TweenService:Create(btn,TweenInfo.new(.15),{BackgroundColor3=Color3.fromRGB(8,8,9)}):Play()
+            TweenService:Create(lbl4,TweenInfo.new(.15),{TextColor3=COLORS.text}):Play()
+        end
+    end)
+
     table.insert(Nav.rightTabBtns,{button=btn,label=lbl4,name=name})
     regSearch(name, name, btn)
 
@@ -1294,7 +1309,7 @@ addHistoryEntry = function(txt, col, revertFn)
 end
 
 local genCollapsed=false
-genArrow.MouseButton1Click:Connect(function() playsfx("click"); genCollapsed=not genCollapsed; genArrow.Text=genCollapsed and ">" or "^"; leftPane.Visible=not genCollapsed; leftDivLine.Visible=not genCollapsed end)
+genArrow.MouseButton1Click:Connect(function() playsfx("click"); genCollapsed=not genCollapsed; genArrow.Text=genCollapsed and ">" or "^"; if activeLeftPane then activeLeftPane.Visible=not genCollapsed end; leftDivLine.Visible=not genCollapsed end)
 local prevCollapsed=false
 prevArrow.MouseButton1Click:Connect(function() playsfx("click"); prevCollapsed=not prevCollapsed; prevArrow.Text=prevCollapsed and ">" or "^"; rightPane.Visible=not prevCollapsed end)
 
@@ -2565,6 +2580,25 @@ end)
 -- Каждая верхняя вкладка через API получает свою собственную боковую панель (изолированно
 -- от системных вкладок Main/Profiles/Theme и друг от друга).
 
+-- Переключает активную боковую вкладку внутри одной API-панели (data), с плавным
+-- "свечением" (accent-обводка) у выбранной кнопки, чтобы было видно в какой вкладке ты сейчас
+function selectApiSideTab(data, entry)
+    for _, e in ipairs(data.sideButtons) do
+        TweenService:Create(e.btn, TweenInfo.new(.15), {BackgroundColor3 = Color3.fromRGB(17,17,18)}):Play()
+        if e.activeStroke then
+            TweenService:Create(e.activeStroke, TweenInfo.new(.15), {Transparency = 1}):Play()
+        end
+        e.page.Visible = false
+    end
+    TweenService:Create(entry.btn, TweenInfo.new(.15), {BackgroundColor3 = COLORS.accent}):Play()
+    if entry.activeStroke then
+        TweenService:Create(entry.activeStroke, TweenInfo.new(.15), {Transparency = 0}):Play()
+    end
+    entry.page.Visible = true
+    data.selectedSide = entry.page
+    settingsPage = entry.page
+end
+
 local function createTopTabBtn(name)
     local btn = label(topTabsFrame, "TextButton", {
         Size      = UDim2.fromOffset(56, 22),
@@ -2641,6 +2675,7 @@ local function createTopTabBtn(name)
         -- показываем свою
         apiPanel.Visible    = true
         apiLeftPane.Visible = true
+        activeLeftPane      = apiLeftPane -- теперь стрелка "^" сворачивает именно эту панель
         -- подсвечиваем верхнюю кнопку
         for _, e in ipairs(Nav.topTabBtns) do
             e.button.BackgroundColor3 = Color3.fromRGB(8,8,9)
@@ -2651,15 +2686,10 @@ local function createTopTabBtn(name)
         lbl2.TextColor3 = COLORS.white
         -- скрываем системный bottomBtn (он только для "Main")
         if Nav.sideBottomBtn then Nav.sideBottomBtn.Visible = false end
-        -- активируем первую боковую кнопку этой вкладки
+        -- активируем первую боковую кнопку этой вкладки (с подсветкой/свечением)
         local data = apiSidePanels[name]
         if data and data.sideButtons[1] then
-            local first = data.sideButtons[1]
-            first.btn.BackgroundColor3 = COLORS.accent
-            if data.selectedSide then data.selectedSide.Visible = false end
-            first.page.Visible = true
-            data.selectedSide = first.page
-            settingsPage = first.page
+            selectApiSideTab(data, data.sideButtons[1])
         end
     end)
 
@@ -2691,8 +2721,20 @@ local function createSideTabEntry(topName, sideName)
     lbl3.TextScaled = true; lbl3.ZIndex = 10; pad(lbl3, 4, 4)
     bindCursorHover(btn)
     local uiSc = Instance.new("UIScale", btn)
-    btn.MouseEnter:Connect(function() TweenService:Create(uiSc, TweenInfo.new(.15), {Scale=1.02}):Play() end)
-    btn.MouseLeave:Connect(function() TweenService:Create(uiSc, TweenInfo.new(.15), {Scale=1}):Play() end)
+    btn.MouseEnter:Connect(function()
+        TweenService:Create(uiSc, TweenInfo.new(.15), {Scale=1.02}):Play()
+        if data.selectedSide ~= page then
+            TweenService:Create(btn,TweenInfo.new(.15),{BackgroundColor3=Color3.fromRGB(22,22,24)}):Play()
+            TweenService:Create(lbl3,TweenInfo.new(.15),{TextColor3=COLORS.white}):Play()
+        end
+    end)
+    btn.MouseLeave:Connect(function()
+        TweenService:Create(uiSc, TweenInfo.new(.15), {Scale=1}):Play()
+        if data.selectedSide ~= page then
+            TweenService:Create(btn,TweenInfo.new(.15),{BackgroundColor3=Color3.fromRGB(17,17,18)}):Play()
+            TweenService:Create(lbl3,TweenInfo.new(.15),{TextColor3=COLORS.text}):Play()
+        end
+    end)
 
     -- Страница контента — живёт в отдельном leftPane этой верхней вкладки
     local page = Instance.new("ScrollingFrame", data.leftPane)
@@ -2706,7 +2748,7 @@ local function createSideTabEntry(topName, sideName)
     local pLL = Instance.new("UIListLayout", page)
     pLL.SortOrder = Enum.SortOrder.LayoutOrder; pLL.Padding = UDim.new(0,0)
 
-    local entry = {btn = btn, page = page, name = sideName}
+    local entry = {btn = btn, page = page, name = sideName, activeStroke = activeStroke}
     table.insert(data.sideButtons, entry)
 
     -- если это первая боковая кнопка — показываем её сразу (при активации верхней вкладки)
@@ -2716,15 +2758,7 @@ local function createSideTabEntry(topName, sideName)
 
     btn.MouseButton1Click:Connect(function()
         playsfx("click")
-        -- скрываем все страницы этой верхней вкладки, показываем выбранную
-        for _, e in ipairs(data.sideButtons) do
-            e.btn.BackgroundColor3 = Color3.fromRGB(17,17,18)
-            e.page.Visible = false
-        end
-        btn.BackgroundColor3 = COLORS.accent
-        page.Visible = true
-        data.selectedSide = page
-        settingsPage = page
+        selectApiSideTab(data, entry)
     end)
 
     return page
