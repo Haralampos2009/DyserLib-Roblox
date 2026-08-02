@@ -2767,14 +2767,20 @@ end
 -- ── SideTab объект — то, через что пользователь добавляет элементы
 local function makeSideTabAPI(page, sideName)
     local api = {}
+    local pageSection = nil -- текущая секция ИМЕННО ЭТОЙ страницы — сохраняется между вызовами,
+                              -- чтобы toggle/button/slider попадали в rows той секции, что была
+                              -- открыта последним AddSection() на этой же странице
 
     -- перед каждым вызовом builder-функции нужно переключить settingsPage на нужную страницу
     local function withPage(fn)
-        local prev = settingsPage
+        local prevPage    = settingsPage
+        local prevSection = curSection
         settingsPage = page
-        curSection = nil
+        curSection   = pageSection -- восстанавливаем секцию, в которую писали в прошлый раз
         fn()
-        settingsPage = prev
+        pageSection  = curSection  -- запоминаем (возможно обновлённую addSection'ом) секцию
+        settingsPage = prevPage
+        curSection   = prevSection
     end
 
     function api:AddSection(txt)
