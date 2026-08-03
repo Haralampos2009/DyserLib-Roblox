@@ -1346,7 +1346,17 @@ local function addSection(txt,tabName)
     local arr=label(sec,"TextButton",{AnchorPoint=Vector2.new(1,0),Position=UDim2.new(1,-3,0,7), Size=UDim2.fromOffset(16,16),BackgroundTransparency=0,BackgroundColor3=Color3.fromRGB(8,8,9), Text="^",TextSize=10,Font=Enum.Font.GothamBold,AutoButtonColor=false, Category="Buttons"})
     corner(arr,3); stroke(arr,COLORS.line,1,.15); bindCursorHover(arr)
     local grp={rows={},name=tabName}; curSection=grp
-    arr.MouseButton1Click:Connect(function() playsfx("click"); collapsed=not collapsed; arr.Text=collapsed and ">" or "^"; for _,r in ipairs(grp.rows) do if r and r.Parent then r.Visible=not collapsed end end end)
+    arr.MouseButton1Click:Connect(function()
+        playsfx("click")
+        collapsed=not collapsed
+        arr.Text=collapsed and ">" or "^"
+        -- сворачиваем ВЕСЬ раздел целиком: заголовок, линии-разделители и содержимое —
+        -- видимой остаётся только сама стрелка, чтобы можно было развернуть обратно
+        l.Visible   = not collapsed
+        top.Visible = not collapsed
+        bot.Visible = not collapsed
+        for _,r in ipairs(grp.rows) do if r and r.Parent then r.Visible=not collapsed end end
+    end)
 end
 
 local function addToggle(txt,cb)
