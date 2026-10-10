@@ -23,7 +23,7 @@ local scriptConnections = {}
 local function __init()
 
 -- ===================== CONFIGURATION =====================
-local MENU_NAME    = "Dyser"
+local MENU_NAME    = "Thedyserrealm"
 local TOGGLE_KEY   = Enum.KeyCode.RightShift
 
 -- Top tabs -> side tabs included in them
@@ -59,8 +59,10 @@ local FONTS = { default = Enum.Font.Code, bold = Enum.Font.GothamBold }
 local TSIZES = { title=14, tab=11, sideTab=10, label=13, value=14, section=12 }
 local MENU_POS  = { x=0.21, y=0.21 }
 local MENU_SIZE = { x=0.50, y=0.60 }
-local MENU_MIN  = Vector2.new(650, 460)
-local MENU_MAX  = Vector2.new(900, 800)
+-- ширина окна: левая панель занимает фиксированные 408 px, всё остальное достаётся правой панели,
+-- поэтому окно сделано шире (было 650..900), чтобы вкладки и названия функций справа читались
+local MENU_MIN  = Vector2.new(900, 460)
+local MENU_MAX  = Vector2.new(1100, 800)
 local MENU_SCALE = 0.95
 
 -- ===================== SOUND SYSTEM =====================
@@ -127,6 +129,15 @@ local sliderSet   = {}
 
 local curSection    = nil
 local settingsPage  = nil
+
+-- масштаб размеров строк, текста и отступов на ПРАВЫХ вкладках (Settings, Themes, Cursor, History).
+-- RS.scale — единственное число, которое нужно менять: больше = крупнее и свободнее (1 = как было)
+local RS = { scale = 1.3, pane = nil }
+function RS.n(v)   -- масштабирует число, только если сейчас строится страница правой панели
+    if RS.pane and settingsPage and settingsPage:IsDescendantOf(RS.pane) then return math.floor(v * RS.scale + 0.5) end
+    return v
+end
+function RS.f(v) return math.floor(v * RS.scale + 0.5) end  -- масштабирует всегда (для строк, собранных вручную)
 local waitingBind   = nil
 local keybinds      = {}
 local searchHighlighted = {}
@@ -807,13 +818,13 @@ logoImg.Size = UDim2.fromOffset(24, 24)
 logoImg.BackgroundTransparency = 1
 logoImg.Image = "rbxassetid://85321985213119"
 
-local dTitle=label(topBar,"TextLabel",{Position=UDim2.fromOffset(40,0),Size=UDim2.fromOffset(96,30),
-    Text=MENU_NAME,TextSize=18,Font=Enum.Font.Michroma,TextColor3=COLORS.accent, TextXAlignment=Enum.TextXAlignment.Left})
+local dTitle=label(topBar,"TextLabel",{Position=UDim2.fromOffset(40,0),Size=UDim2.fromOffset(170,30),
+    Text=MENU_NAME,TextSize=15,Font=Enum.Font.Michroma,TextColor3=COLORS.accent, TextXAlignment=Enum.TextXAlignment.Left})
 dTitle.TextStrokeTransparency=.5; Track.TextElement(dTitle)
 end
 
 local topTabsFrame=Instance.new("ScrollingFrame",topBar)
-topTabsFrame.Position=UDim2.fromOffset(150,4); topTabsFrame.Size=UDim2.fromOffset(180,22)
+topTabsFrame.Position=UDim2.fromOffset(220,4); topTabsFrame.Size=UDim2.new(1,-305,0,22)
 topTabsFrame.BackgroundTransparency=1
 topTabsFrame.BorderSizePixel=0
 topTabsFrame.ScrollingDirection=Enum.ScrollingDirection.X
@@ -1022,13 +1033,14 @@ local rightPane=Instance.new("Frame",contentZone)
 rightPane.Name="RightPane"; rightPane.Position=UDim2.fromOffset(409,0)
 rightPane.Size=UDim2.new(1,-409,1,0); rightPane.BorderSizePixel=0; rightPane.ClipsDescendants=true
 Track.WindowBG(rightPane)
+RS.pane = rightPane
 
 local rightTop=Instance.new("Frame",rightPane)
-rightTop.Size=UDim2.new(1,0,0,50); rightTop.BorderSizePixel=0
+rightTop.Size=UDim2.new(1,0,0,60); rightTop.BorderSizePixel=0
 Track.WindowBG(rightTop)
 
 local rTabCont=Instance.new("ScrollingFrame",rightTop)
-rTabCont.Position=UDim2.fromOffset(5,2); rTabCont.Size=UDim2.new(1,-35,0,19); rTabCont.BackgroundTransparency=1
+rTabCont.Position=UDim2.fromOffset(5,3); rTabCont.Size=UDim2.new(1,-35,0,26); rTabCont.BackgroundTransparency=1
 rTabCont.BorderSizePixel=0
 rTabCont.ScrollingDirection=Enum.ScrollingDirection.X
 rTabCont.ScrollBarThickness=3
@@ -1039,15 +1051,15 @@ local rTabLL=Instance.new("UIListLayout",rTabCont)
 rTabLL.FillDirection=Enum.FillDirection.Horizontal; rTabLL.Padding=UDim.new(0,4); rTabLL.SortOrder=Enum.SortOrder.LayoutOrder
 
 local searchFrame=Instance.new("Frame",rightTop)
-searchFrame.Position=UDim2.fromOffset(5,24); searchFrame.Size=UDim2.new(1,-10,0,22)
+searchFrame.Position=UDim2.fromOffset(5,32); searchFrame.Size=UDim2.new(1,-10,0,24)
 searchFrame.BackgroundColor3=Color3.fromRGB(8,8,9); searchFrame.BorderSizePixel=0
 corner(searchFrame,4); stroke(searchFrame,COLORS.lineLight,1,.15)
 
-local searchIcon=label(searchFrame,"TextLabel",{Size=UDim2.fromOffset(20,22),Text="🔍",TextSize=11,TextXAlignment=Enum.TextXAlignment.Center, Category="Labels"})
+local searchIcon=label(searchFrame,"TextLabel",{Size=UDim2.fromOffset(22,24),Text="🔍",TextSize=12,TextXAlignment=Enum.TextXAlignment.Center, Category="Labels"})
 local searchBox=Instance.new("TextBox",searchFrame)
 searchBox.Size=UDim2.new(1,-46,1,0); searchBox.Position=UDim2.fromOffset(22,0)
 searchBox.BackgroundTransparency=1; searchBox.Text=""; searchBox.PlaceholderText="Search elements..."
-searchBox.PlaceholderColor3=COLORS.muted; searchBox.TextColor3=COLORS.text; searchBox.TextSize=12
+searchBox.PlaceholderColor3=COLORS.muted; searchBox.TextColor3=COLORS.text; searchBox.TextSize=13
 searchBox.Font=Enum.Font.Code; searchBox.ClearTextOnFocus=false
 bindCursorHover(searchBox); trackText("Inputs", searchBox); trackColorText(searchBox)
 
@@ -1117,11 +1129,11 @@ searchBox.FocusLost:Connect(function(enter) if enter then doSearch(searchBox.Tex
 clearBtn.MouseButton1Click:Connect(function() playsfx("click"); searchBox.Text=""; searchBox.PlaceholderText="Search elements..."; clearHighlight(); clearBtn.Visible=false end)
 
 for i,name in ipairs(RIGHT_TABS) do
-    local btn=label(rTabCont,"TextButton",{Size=UDim2.fromOffset(70,19),BackgroundTransparency=0,
+    local btn=label(rTabCont,"TextButton",{Size=UDim2.fromOffset(80,26),BackgroundTransparency=0,
         BackgroundColor3=i==1 and COLORS.accent or Color3.fromRGB(8,8,9),Text="",
         TextSize=10,Font=FONTS.bold,AutoButtonColor=false})
     corner(btn,3); stroke(btn,COLORS.lineLight,1,.25); bubble(btn,6,true)
-    local lbl4=label(btn,"TextLabel",{Size=UDim2.new(1,0,1,0),Text=name,TextSize=10,Font=FONTS.bold,
+    local lbl4=label(btn,"TextLabel",{Size=UDim2.new(1,0,1,0),Text=name,TextSize=13,Font=FONTS.bold,
         TextXAlignment=Enum.TextXAlignment.Center,TextColor3=i==1 and COLORS.white or COLORS.text,
         Category="TopTabs"})
     lbl4.ZIndex=10
@@ -1144,13 +1156,13 @@ for i,name in ipairs(RIGHT_TABS) do
     regSearch(name, name, btn)
 
     local pg=Instance.new("ScrollingFrame",rightPane)
-    pg.Name=name.."Page"; pg.Position=UDim2.fromOffset(0,50); pg.Size=UDim2.new(1,0,1,-50)
+    pg.Name=name.."Page"; pg.Position=UDim2.fromOffset(0,60); pg.Size=UDim2.new(1,0,1,-60)
     pg.BorderSizePixel=0
     Track.WindowBG(pg)
     pg.ScrollBarThickness=3; Track.Scrollbar(pg)
     pg.CanvasSize=UDim2.fromOffset(0,0); pg.AutomaticCanvasSize=Enum.AutomaticSize.Y; pg.Visible=false
-    pad(pg,6,6,6)
-    local pgLL=Instance.new("UIListLayout",pg); pgLL.SortOrder=Enum.SortOrder.LayoutOrder; pgLL.Padding=UDim.new(0,4)
+    pad(pg,8,8,8)
+    local pgLL=Instance.new("UIListLayout",pg); pgLL.SortOrder=Enum.SortOrder.LayoutOrder; pgLL.Padding=UDim.new(0,RS.f(4))
     Nav.rightTabPgs[name]=pg
 
     btn.MouseButton1Click:Connect(function() playsfx("click"); selectRight(btn,name,pg) end)
@@ -1203,18 +1215,18 @@ local settingsP = Nav.rightTabPgs["Settings"]
 do
     if settingsP then
         local sH = Instance.new("Frame", settingsP)
-    sH.Size = UDim2.new(1,0,0,22); sH.BackgroundColor3 = Color3.fromRGB(10,10,13)
+    sH.Size = UDim2.new(1,0,0,RS.f(22)); sH.BackgroundColor3 = Color3.fromRGB(10,10,13)
     sH.BorderSizePixel = 0; sH.LayoutOrder = 1; corner(sH, 3)
-    local sHL = label(sH,"TextLabel",{Size=UDim2.new(1,-8,1,0),Position=UDim2.fromOffset(6,0), Text="🔊  Sound Feedback", TextSize=11, Font=FONTS.bold, TextColor3=COLORS.accent, TextXAlignment=Enum.TextXAlignment.Left, Category="Labels"})
+    local sHL = label(sH,"TextLabel",{Size=UDim2.new(1,-8,1,0),Position=UDim2.fromOffset(6,0), Text="🔊  Sound Feedback", TextSize=RS.f(11), Font=FONTS.bold, TextColor3=COLORS.accent, TextXAlignment=Enum.TextXAlignment.Left, Category="Labels"})
     table.insert(Acc.texts, sHL)
     regSearch("Sound Feedback", "Settings", sH)
 
     local sndRow = Instance.new("Frame", settingsP)
-    sndRow.Size = UDim2.new(1,0,0,26); sndRow.BackgroundColor3 = Color3.fromRGB(8,8,10)
+    sndRow.Size = UDim2.new(1,0,0,RS.f(26)); sndRow.BackgroundColor3 = Color3.fromRGB(8,8,10)
     sndRow.BackgroundTransparency = .1; sndRow.BorderSizePixel = 0; sndRow.LayoutOrder = 2
     corner(sndRow, 3)
-    label(sndRow,"TextLabel",{Position=UDim2.fromOffset(8,0),Size=UDim2.new(1,-36,1,0), Text="Sound Enabled",TextSize=10,Font=FONTS.default,TextColor3=COLORS.text, TextXAlignment=Enum.TextXAlignment.Left, Category="Labels"})
-    local sndBox = label(sndRow,"TextButton",{AnchorPoint=Vector2.new(1,.5), Position=UDim2.new(1,-3,.5,0),Size=UDim2.fromOffset(22,22), BackgroundColor3=Color3.fromRGB(9,30,15),Text="✓",TextSize=16, Font=FONTS.bold,TextColor3=Color3.fromRGB(70,230,120),AutoButtonColor=false, Category="Buttons"})
+    label(sndRow,"TextLabel",{Position=UDim2.fromOffset(8,0),Size=UDim2.new(1,-36,1,0), Text="Sound Enabled",TextSize=RS.f(10),Font=FONTS.default,TextColor3=COLORS.text, TextXAlignment=Enum.TextXAlignment.Left, Category="Labels"})
+    local sndBox = label(sndRow,"TextButton",{AnchorPoint=Vector2.new(1,.5), Position=UDim2.new(1,-3,.5,0),Size=UDim2.fromOffset(RS.f(22),RS.f(22)), BackgroundColor3=Color3.fromRGB(9,30,15),Text="✓",TextSize=RS.f(16), Font=FONTS.bold,TextColor3=Color3.fromRGB(70,230,120),AutoButtonColor=false, Category="Buttons"})
     corner(sndBox,4); bindCursorHover(sndBox)
     sndBox.MouseButton1Click:Connect(function()
         sfxEnabled = not sfxEnabled
@@ -1227,8 +1239,8 @@ do
     regSearch("Sound Enabled", "Settings", sndRow)
 
     local volRow = Instance.new("Frame", settingsP)
-    volRow.Size = UDim2.new(1,0,0,26); volRow.BackgroundTransparency = 1; volRow.BorderSizePixel = 0; volRow.LayoutOrder = 3
-    label(volRow,"TextLabel",{Position=UDim2.fromOffset(8,0),Size=UDim2.new(.36,0,1,0), Text="Volume",TextSize=10,Font=FONTS.default,TextColor3=COLORS.text, TextXAlignment=Enum.TextXAlignment.Left, Category="Labels"})
+    volRow.Size = UDim2.new(1,0,0,RS.f(26)); volRow.BackgroundTransparency = 1; volRow.BorderSizePixel = 0; volRow.LayoutOrder = 3
+    label(volRow,"TextLabel",{Position=UDim2.fromOffset(8,0),Size=UDim2.new(.36,0,1,0), Text="Volume",TextSize=RS.f(10),Font=FONTS.default,TextColor3=COLORS.text, TextXAlignment=Enum.TextXAlignment.Left, Category="Labels"})
     local vTrack = Instance.new("Frame", volRow)
     vTrack.Position = UDim2.new(.36,0,.5,-5); vTrack.Size = UDim2.new(.50,0,0,10)
     vTrack.BackgroundColor3 = Color3.fromRGB(10,10,11); vTrack.BorderSizePixel = 0; vTrack.Active = true; corner(vTrack,3); stroke(vTrack,Color3.fromRGB(28,28,30),1,.2)
@@ -1236,7 +1248,7 @@ do
     local vFill = Instance.new("Frame", volRow)
     vFill.Position = UDim2.new(.36,0,.5,-5); vFill.Size = UDim2.new(.25,0,0,10)
     vFill.BackgroundColor3 = COLORS.accent; vFill.BorderSizePixel = 0; corner(vFill,3); Track.BG(vFill); Track.Grad(gradient(vFill,COLORS.accentDk,COLORS.accent,0))
-    local vLbl = label(volRow,"TextLabel",{AnchorPoint=Vector2.new(1,.5), Position=UDim2.new(1,-4,.5,0),Size=UDim2.fromOffset(34,20),Text="50%", TextSize=10,Font=Enum.Font.Code,TextColor3=COLORS.muted, TextXAlignment=Enum.TextXAlignment.Right, Category="Labels"})
+    local vLbl = label(volRow,"TextLabel",{AnchorPoint=Vector2.new(1,.5), Position=UDim2.new(1,-4,.5,0),Size=UDim2.fromOffset(RS.f(34),RS.f(20)),Text="50%", TextSize=RS.f(10),Font=Enum.Font.Code,TextColor3=COLORS.muted, TextXAlignment=Enum.TextXAlignment.Right, Category="Labels"})
         
     local function setVol(a)
         a = math.clamp(a,0,1);
@@ -1272,9 +1284,9 @@ end
 local historyCount = 0
 
 local histDateHdr = Instance.new("Frame", historyPage)
-histDateHdr.Size = UDim2.new(1,0,0,30); histDateHdr.BackgroundColor3 = Color3.fromRGB(8,8,10)
+histDateHdr.Size = UDim2.new(1,0,0,RS.f(30)); histDateHdr.BackgroundColor3 = Color3.fromRGB(8,8,10)
 histDateHdr.BackgroundTransparency = 0; histDateHdr.BorderSizePixel = 0; histDateHdr.LayoutOrder = -999
-local histDateLbl = label(histDateHdr,"TextLabel",{ Size=UDim2.new(1,-60,1,0), Position=UDim2.fromOffset(8,0), Text="📅  ".. (os.date and os.date("%d %B %Y") or "Session"), TextSize=12, Font=FONTS.bold, TextColor3=COLORS.text, TextXAlignment=Enum.TextXAlignment.Left, Category="Labels"})
+local histDateLbl = label(histDateHdr,"TextLabel",{ Size=UDim2.new(1,-60,1,0), Position=UDim2.fromOffset(8,0), Text="📅  ".. (os.date and os.date("%d %B %Y") or "Session"), TextSize=RS.f(12), Font=FONTS.bold, TextColor3=COLORS.text, TextXAlignment=Enum.TextXAlignment.Left, Category="Labels"})
 local histClearBtn2 = label(histDateHdr,"TextButton",{ AnchorPoint=Vector2.new(1,.5), Position=UDim2.new(1,-4,.5,0), Size=UDim2.fromOffset(52,20), BackgroundColor3=Color3.fromRGB(18,6,6), Text="Clear", TextSize=10, Font=FONTS.bold, TextColor3=COLORS.pink, AutoButtonColor=false, Category="Buttons"})
 corner(histClearBtn2,3); stroke(histClearBtn2,Color3.fromRGB(60,15,15),1,.2); bindCursorHover(histClearBtn2)
 histClearBtn2.MouseButton1Click:Connect(function()
@@ -1291,7 +1303,7 @@ addHistoryEntry = function(txt, col, revertFn)
     local ts = os.date and os.date("%H:%M:%S") or ("+"..historyCount)
 
     local row = Instance.new("Frame", historyPage)
-    row.Size = UDim2.new(1,0,0,36); row.BackgroundColor3 = Color3.fromRGB(7,7,9)
+    row.Size = UDim2.new(1,0,0,46); row.BackgroundColor3 = Color3.fromRGB(7,7,9)
     row.BackgroundTransparency = historyCount%2==0 and .05 or .12
     row.BorderSizePixel = 0; row.LayoutOrder = historyCount
 
@@ -1299,10 +1311,10 @@ addHistoryEntry = function(txt, col, revertFn)
     sep.Size=UDim2.new(0,3,1,-4); sep.Position=UDim2.fromOffset(0,2)
     sep.BackgroundColor3 = col or COLORS.accent; sep.BorderSizePixel=0; corner(sep,2)
 
-    local textW = revertFn and UDim2.new(1,-82,0,20) or UDim2.new(1,-40,0,20)
+    local textW = revertFn and UDim2.new(1,-82,0,22) or UDim2.new(1,-40,0,22)
 
-    local tl = label(row,"TextLabel",{ Position=UDim2.fromOffset(10,2), Size=textW, Text=txt, TextSize=12, Font=Enum.Font.GothamBold, TextColor3=col or COLORS.text, TextXAlignment=Enum.TextXAlignment.Left, TextTruncate=Enum.TextTruncate.AtEnd, Category="Labels"})
-    local tsl = label(row,"TextLabel",{ Position=UDim2.fromOffset(10,20), Size=UDim2.new(1,-82,0,14), Text="⏱  "..ts, TextSize=10, Font=Enum.Font.Code, TextColor3=COLORS.muted, TextXAlignment=Enum.TextXAlignment.Left, Category="Labels"})
+    local tl = label(row,"TextLabel",{ Position=UDim2.fromOffset(10,3), Size=textW, Text=txt, TextSize=15, Font=Enum.Font.GothamBold, TextColor3=col or COLORS.text, TextXAlignment=Enum.TextXAlignment.Left, TextTruncate=Enum.TextTruncate.AtEnd, Category="Labels"})
+    local tsl = label(row,"TextLabel",{ Position=UDim2.fromOffset(10,26), Size=UDim2.new(1,-82,0,16), Text="⏱  "..ts, TextSize=12, Font=Enum.Font.Code, TextColor3=COLORS.muted, TextXAlignment=Enum.TextXAlignment.Left, Category="Labels"})
     local numLbl = label(row,"TextLabel",{ AnchorPoint=Vector2.new(1,1), Position=UDim2.new(1,-4,1,-2), Size=UDim2.fromOffset(28,12), Text="#"..historyCount, TextSize=9, Font=Enum.Font.Code, TextColor3=Color3.fromRGB(45,45,50), TextXAlignment=Enum.TextXAlignment.Right, Category="Labels"})
 
     if revertFn then
@@ -1340,7 +1352,7 @@ end
 
 local function makeRow(h)
     local r=Instance.new("Frame",settingsPage)
-    r.Size=UDim2.new(1,0,0,h or 28); Track.WindowBG(r); r.BackgroundTransparency=.04; r.BorderSizePixel=0; r.Active=true
+    r.Size=UDim2.new(1,0,0,RS.n(h or 28)); Track.WindowBG(r); r.BackgroundTransparency=.04; r.BorderSizePixel=0; r.Active=true
     table.insert(Elems.row, r)
     rowLine(r)
     if curSection then table.insert(curSection.rows,r) end
@@ -1348,19 +1360,19 @@ local function makeRow(h)
 end
 
 local function rowLabel(row,txt, category)
-    local l=label(row,"TextLabel",{Name="Label",Size=UDim2.new(1,-32,1,0),Text=txt or "Option", TextSize=TSIZES.label,TextColor3=Color3.fromRGB(205,205,210), Category = category or "Labels"})
+    local l=label(row,"TextLabel",{Name="Label",Size=UDim2.new(1,-RS.n(32),1,0),Text=txt or "Option", TextSize=RS.n(TSIZES.label), TextTruncate=Enum.TextTruncate.AtEnd,TextColor3=Color3.fromRGB(205,205,210), Category = category or "Labels"})
     l.TextStrokeTransparency=.75; pad(l,3); return l
 end
 
 local function addSection(txt,tabName)
     local sec=Instance.new("Frame",settingsPage)
-    sec.Size=UDim2.new(1,0,0,SIZES.sectionH); Track.WindowBG(sec); sec.BorderSizePixel=0
+    sec.Size=UDim2.new(1,0,0,RS.n(SIZES.sectionH)); Track.WindowBG(sec); sec.BorderSizePixel=0
     table.insert(Elems.section, sec)
     local top=Instance.new("Frame",sec); top.Position=UDim2.fromOffset(0,4); top.Size=UDim2.new(1,0,0,2); top.BorderSizePixel=0; Track.DkBG(top)
     local bot=Instance.new("Frame",sec); bot.AnchorPoint=Vector2.new(0,1); bot.Position=UDim2.new(0,0,1,0); bot.Size=UDim2.new(1,0,0,1); bot.BackgroundColor3=Color3.fromRGB(30,30,32); bot.BorderSizePixel=0
-    local l=label(sec,"TextLabel",{Position=UDim2.fromOffset(0,4),Size=UDim2.new(1,-28,0,21),Text=txt or "Section",TextSize=TSIZES.section, Category="Labels"}); pad(l,3)
+    local l=label(sec,"TextLabel",{Position=UDim2.fromOffset(0,4),Size=UDim2.new(1,-RS.n(28),0,RS.n(21)),Text=txt or "Section",TextSize=RS.n(TSIZES.section), Category="Labels"}); pad(l,3)
     local collapsed=false
-    local arr=label(sec,"TextButton",{AnchorPoint=Vector2.new(1,0),Position=UDim2.new(1,-3,0,7), Size=UDim2.fromOffset(16,16),BackgroundTransparency=0,BackgroundColor3=Color3.fromRGB(8,8,9), Text="^",TextSize=10,Font=Enum.Font.GothamBold,AutoButtonColor=false, Category="Buttons"})
+    local arr=label(sec,"TextButton",{AnchorPoint=Vector2.new(1,0),Position=UDim2.new(1,-3,0,RS.n(7)), Size=UDim2.fromOffset(RS.n(16),RS.n(16)),BackgroundTransparency=0,BackgroundColor3=Color3.fromRGB(8,8,9), Text="^",TextSize=RS.n(10),Font=Enum.Font.GothamBold,AutoButtonColor=false, Category="Buttons"})
     corner(arr,3); stroke(arr,COLORS.line,1,.15); bindCursorHover(arr)
     local grp={rows={},name=tabName}; curSection=grp
     arr.MouseButton1Click:Connect(function()
@@ -1380,7 +1392,7 @@ local function addToggle(txt,cb)
     local row=makeRow(23); rowLabel(row,txt, "Labels")
     if curSection then regSearch(txt,curSection.name,row) end
     local en=false
-    local box=label(row,"TextButton",{AnchorPoint=Vector2.new(1,.5),Position=UDim2.new(1,-3,.5,0), Size=UDim2.fromOffset(SIZES.toggleBox,SIZES.toggleBox),BackgroundTransparency=0, BackgroundColor3=Color3.fromRGB(16,10,15),Text="x",TextColor3=COLORS.pink, TextSize=18,Font=FONTS.bold,AutoButtonColor=false, Category="Buttons"})
+    local box=label(row,"TextButton",{AnchorPoint=Vector2.new(1,.5),Position=UDim2.new(1,-3,.5,0), Size=UDim2.fromOffset(RS.n(SIZES.toggleBox),RS.n(SIZES.toggleBox)),BackgroundTransparency=0, BackgroundColor3=Color3.fromRGB(16,10,15),Text="x",TextColor3=COLORS.pink, TextSize=RS.n(18),Font=FONTS.bold,AutoButtonColor=false, Category="Buttons"})
     box.TextStrokeTransparency=.25; corner(box,4); bindCursorHover(box)
     local inactStr=stroke(box,Color3.fromRGB(48,28,43),1,.05)
     local glowStr=stroke(box,COLORS.accent,2,.0); glowStr.Transparency=1; table.insert(Acc.strokes,glowStr)
@@ -1409,9 +1421,9 @@ end
 local function addButton(txt,cb)
     local row=makeRow(23)
     if curSection then regSearch(txt,curSection.name,row) end
-    local btn=label(row,"TextButton",{Size=UDim2.new(1,-12,1,-4),Position=UDim2.fromOffset(6,2),Text="", TextSize=TSIZES.label,BackgroundTransparency=0,BackgroundColor3=COLORS.accent, Font=FONTS.bold,AutoButtonColor=false, Category="Buttons"})
+    local btn=label(row,"TextButton",{Size=UDim2.new(1,-12,1,-4),Position=UDim2.fromOffset(6,2),Text="", TextSize=RS.n(TSIZES.label),BackgroundTransparency=0,BackgroundColor3=COLORS.accent, Font=FONTS.bold,AutoButtonColor=false, Category="Buttons"})
     corner(btn,4); Track.BG(btn); bubble(btn,20,true,nil,nil,true); bindCursorHover(btn)
-    local l2=label(btn,"TextLabel",{Size=UDim2.new(1,0,1,0),Text=txt,TextSize=TSIZES.label, Font=FONTS.bold,TextXAlignment=Enum.TextXAlignment.Center, Category="Buttons"}); l2.ZIndex=10
+    local l2=label(btn,"TextLabel",{Size=UDim2.new(1,0,1,0),Text=txt,TextSize=RS.n(TSIZES.label), Font=FONTS.bold,TextXAlignment=Enum.TextXAlignment.Center, Category="Buttons"}); l2.ZIndex=10
     local btnSc=Instance.new("UIScale",btn); btnSc.Scale=1
     btn.MouseEnter:Connect(function() TweenService:Create(btn,TweenInfo.new(.12),{BackgroundColor3=scaledC(COLORS.accent,1.15)}):Play(); TweenService:Create(btnSc,TweenInfo.new(.12),{Scale=1.03}):Play() end)
     btn.MouseLeave:Connect(function() TweenService:Create(btn,TweenInfo.new(.12),{BackgroundColor3=COLORS.accent}):Play(); TweenService:Create(btnSc,TweenInfo.new(.12),{Scale=1}):Play() end)
@@ -1426,13 +1438,14 @@ end
 local function addSlider(txt,val,fillScale,cb)
     local row=makeRow(23)
     if curSection then regSearch(txt,curSection.name,row) end
-    local track=Instance.new("Frame",row); track.Position=UDim2.fromOffset(0,3); track.Size=UDim2.new(1,-2,0,SIZES.sliderH); track.BackgroundColor3=Color3.fromRGB(10,10,11); track.BorderSizePixel=0; track.Active=true; stroke(track,Color3.fromRGB(28,28,30),1,.15); bindCursorHover(track)
-    local fill=Instance.new("Frame",row); fill.Position=UDim2.fromOffset(0,3); fill.Size=UDim2.new(fillScale or .5,0,0,SIZES.sliderH); fill.BackgroundColor3=COLORS.accent; fill.BorderSizePixel=0; fill.Active=true; Track.Grad(gradient(fill,COLORS.accentDk,COLORS.accent,0)); bubble(fill,20,false,nil,nil,true)
+    local sH,sY=RS.n(SIZES.sliderH),RS.n(3)
+    local track=Instance.new("Frame",row); track.Position=UDim2.fromOffset(0,sY); track.Size=UDim2.new(1,-2,0,sH); track.BackgroundColor3=Color3.fromRGB(10,10,11); track.BorderSizePixel=0; track.Active=true; stroke(track,Color3.fromRGB(28,28,30),1,.15); bindCursorHover(track)
+    local fill=Instance.new("Frame",row); fill.Position=UDim2.fromOffset(0,sY); fill.Size=UDim2.new(fillScale or .5,0,0,sH); fill.BackgroundColor3=COLORS.accent; fill.BorderSizePixel=0; fill.Active=true; Track.Grad(gradient(fill,COLORS.accentDk,COLORS.accent,0)); bubble(fill,20,false,nil,nil,true)
     rowLabel(row,txt, "Sliders")
-    local vt=label(row,"TextLabel",{AnchorPoint=Vector2.new(1,0),Position=UDim2.new(1,-5,0,0), Size=UDim2.fromOffset(72,23),Text=tostring(val or 50),TextSize=TSIZES.value,TextXAlignment=Enum.TextXAlignment.Right, Category="Sliders"})
+    local vt=label(row,"TextLabel",{AnchorPoint=Vector2.new(1,0),Position=UDim2.new(1,-5,0,0), Size=UDim2.fromOffset(RS.n(72),RS.n(23)),Text=tostring(val or 50),TextSize=RS.n(TSIZES.value),TextXAlignment=Enum.TextXAlignment.Right, Category="Sliders"})
     local maxN=(tonumber(tostring(val)) or 100)/(fillScale or .5)
     local function setA(a)
-        a=math.clamp(a,0,1); fill.Size=UDim2.new(a,0,0,SIZES.sliderH)
+        a=math.clamp(a,0,1); fill.Size=UDim2.new(a,0,0,sH)
         vt.Text=tostring(math.floor(maxN*a+.5)); menuState.sliders[txt]=a
         if cb then cb(a) end
     end
@@ -1466,9 +1479,9 @@ local function addInput(txt,def,cb)
     if curSection then regSearch(txt,curSection.name,row) end
     rowLabel(row,txt, "Inputs")
     local box=Instance.new("TextBox",row)
-    box.AnchorPoint=Vector2.new(1,.5); box.Position=UDim2.new(1,-4,.5,0); box.Size=UDim2.fromOffset(120,20); box.BackgroundColor3=Color3.fromRGB(15,15,16)
+    box.AnchorPoint=Vector2.new(1,.5); box.Position=UDim2.new(1,-4,.5,0); box.Size=UDim2.fromOffset(RS.n(120),RS.n(20)); box.BackgroundColor3=Color3.fromRGB(15,15,16)
     box.BorderSizePixel=0; box.Text=def or ""; box.PlaceholderText="..."
-    box.PlaceholderColor3=COLORS.muted; box.TextColor3=COLORS.text; box.TextSize=11
+    box.PlaceholderColor3=COLORS.muted; box.TextColor3=COLORS.text; box.TextSize=RS.n(11)
     box.Font=Enum.Font.Code; box.ClearTextOnFocus=false
     corner(box,3); stroke(box,Color3.fromRGB(30,30,32),1,.2); pad(box,5); bindCursorHover(box); trackText("Inputs", box); trackColorText(box)
     local prevText = def or ""
@@ -1496,12 +1509,12 @@ local function addKeybind(txt, defaultKey, onToggle)
     local active=false
     local keyCode=defaultKey
 
-    local toggleBox=label(row,"TextButton",{AnchorPoint=Vector2.new(1,.5),Position=UDim2.new(1,-3,.5,0), Size=UDim2.fromOffset(SIZES.toggleBox,SIZES.toggleBox),BackgroundTransparency=0, BackgroundColor3=Color3.fromRGB(16,10,15),Text="x",TextColor3=COLORS.pink, TextSize=18,Font=FONTS.bold,AutoButtonColor=false, Category="Buttons"})
+    local toggleBox=label(row,"TextButton",{AnchorPoint=Vector2.new(1,.5),Position=UDim2.new(1,-3,.5,0), Size=UDim2.fromOffset(RS.n(SIZES.toggleBox),RS.n(SIZES.toggleBox)),BackgroundTransparency=0, BackgroundColor3=Color3.fromRGB(16,10,15),Text="x",TextColor3=COLORS.pink, TextSize=RS.n(18),Font=FONTS.bold,AutoButtonColor=false, Category="Buttons"})
     toggleBox.TextStrokeTransparency=.25; corner(toggleBox,4); bindCursorHover(toggleBox)
     local inactStr=stroke(toggleBox,Color3.fromRGB(48,28,43),1,.05)
     local glowStr=stroke(toggleBox,COLORS.accent,2,.0); glowStr.Transparency=1; table.insert(Acc.strokes,glowStr)
 
-    local keyBtn=label(row,"TextButton",{AnchorPoint=Vector2.new(1,.5),Position=UDim2.new(1,-3-SIZES.toggleBox-6,.5,0), Size=UDim2.fromOffset(64,20),BackgroundColor3=Color3.fromRGB(15,15,16), Text=keyCode and keyCode.Name or "None",TextColor3=COLORS.text,TextSize=11,Font=Enum.Font.Code,AutoButtonColor=false, Category="Inputs"})
+    local keyBtn=label(row,"TextButton",{AnchorPoint=Vector2.new(1,.5),Position=UDim2.new(1,-3-RS.n(SIZES.toggleBox)-6,.5,0), Size=UDim2.fromOffset(RS.n(64),RS.n(20)),BackgroundColor3=Color3.fromRGB(15,15,16), Text=keyCode and keyCode.Name or "None",TextColor3=COLORS.text,TextSize=RS.n(11),Font=Enum.Font.Code,AutoButtonColor=false, Category="Inputs"})
     corner(keyBtn,3); stroke(keyBtn,Color3.fromRGB(30,30,32),1,.2); bindCursorHover(keyBtn); trackText("Inputs", keyBtn); trackColorText(keyBtn)
 
     local entry = {keyCode=keyCode, button=keyBtn, active=false}
@@ -1544,7 +1557,7 @@ local function addRebindOnly(txt, currentKey, onRebind)
     if curSection then regSearch(txt,curSection.name,row) end
     rowLabel(row,txt, "Labels")
 
-    local keyBtn=label(row,"TextButton",{AnchorPoint=Vector2.new(1,.5),Position=UDim2.new(1,-3,.5,0), Size=UDim2.fromOffset(80,20),BackgroundColor3=Color3.fromRGB(15,15,16), Text=currentKey and currentKey.Name or "None",TextColor3=COLORS.text,TextSize=11,Font=Enum.Font.Code,AutoButtonColor=false, Category="Inputs"})
+    local keyBtn=label(row,"TextButton",{AnchorPoint=Vector2.new(1,.5),Position=UDim2.new(1,-3,.5,0), Size=UDim2.fromOffset(RS.n(80),RS.n(20)),BackgroundColor3=Color3.fromRGB(15,15,16), Text=currentKey and currentKey.Name or "None",TextColor3=COLORS.text,TextSize=RS.n(11),Font=Enum.Font.Code,AutoButtonColor=false, Category="Inputs"})
     corner(keyBtn,3); stroke(keyBtn,Color3.fromRGB(30,30,32),1,.2); bindCursorHover(keyBtn); trackText("Inputs", keyBtn); trackColorText(keyBtn)
 
     local entry = {keyCode=currentKey, button=keyBtn, isRebindOnly=true}
@@ -1567,9 +1580,9 @@ end
 
 
 local function addColorPicker(txt, defaultCol, cb)
-    local collapsedHeight = 28
-    local expandedHeight = 230
-    local row = makeRow(collapsedHeight)
+    local collapsedHeight = RS.n(28)
+    local expandedHeight = collapsedHeight + 202
+    local row = makeRow(28)
     row.ClipsDescendants = true
     
     local lbl = rowLabel(row, txt, "Palettes")
@@ -1579,8 +1592,8 @@ local function addColorPicker(txt, defaultCol, cb)
     if curSection then regSearch(txt, curSection.name, row) end
     
     local previewBtn = Instance.new("TextButton", row)
-    previewBtn.Size = UDim2.fromOffset(20, 20)
-    previewBtn.Position = UDim2.new(1, -26, 0, 4)
+    previewBtn.Size = UDim2.fromOffset(RS.n(20), RS.n(20))
+    previewBtn.Position = UDim2.new(1, -RS.n(26), 0, RS.n(4))
     previewBtn.BackgroundColor3 = defaultCol
     previewBtn.Text = ""
     previewBtn.AutoButtonColor = false
@@ -1842,7 +1855,7 @@ local TAB_CONTENT = {
         {"colorpicker", "Effect Glow Color", ui.glowColor, function(c) ui.glowColor = c end},
 
         {"section", "Rainbow"},
-        {"toggle", "Rainbow Accent (Dyser title, buttons, etc.)", function(v)
+        {"toggle", "Rainbow Accent (title, buttons, etc.)", function(v)
             ui.rainbow = v
             if not v then
                 setAccent(ui.savedAccentColor or COLORS.accent)
@@ -2441,7 +2454,7 @@ if UserInputService.TouchEnabled then
     mobileToggleBtn.Size = UDim2.fromOffset(50, 50)
     mobileToggleBtn.Position = UDim2.new(0, 15, 0, 120) 
     mobileToggleBtn.BackgroundColor3 = COLORS.panel2
-    mobileToggleBtn.Text = MENU_NAME
+    mobileToggleBtn.Text = MENU_NAME; mobileToggleBtn.TextScaled = true
     mobileToggleBtn.TextColor3 = COLORS.accent
     mobileToggleBtn.Font = FONTS.bold
     mobileToggleBtn.TextSize = 11
@@ -2688,7 +2701,7 @@ spawn(function()
     window.Size=UDim2.new(MENU_SIZE.x,0,0,0); window.Position=UDim2.new(MENU_POS.x,0,MENU_POS.y+.1,0)
     TweenService:Create(window,TweenInfo.new(.55,Enum.EasingStyle.Quint,Enum.EasingDirection.Out), {Size=tgt,Position=isMaxed and UDim2.fromOffset(0,0) or UDim2.new(MENU_POS.x,0,MENU_POS.y,0)}):Play()
     playsfx("open")
-    AddLog(MENU_NAME.." loaded!", COLORS.accent)
+    AddLog(MENU_NAME.." loaded! [right-scale "..tostring(RS.scale).."]", COLORS.accent)
 
     task.wait(0.9)
     if not screenGui or not screenGui.Parent then return end
