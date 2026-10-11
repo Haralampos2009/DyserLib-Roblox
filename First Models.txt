@@ -58,11 +58,11 @@ local SIZES = {
 local FONTS = { default = Enum.Font.Code, bold = Enum.Font.GothamBold }
 local TSIZES = { title=14, tab=11, sideTab=10, label=13, value=14, section=12 }
 local MENU_POS  = { x=0.21, y=0.21 }
-local MENU_SIZE = { x=0.50, y=0.60 }
--- ширина окна: левая панель занимает фиксированные 408 px, всё остальное достаётся правой панели,
--- поэтому окно сделано шире (было 650..900), чтобы вкладки и названия функций справа читались
-local MENU_MIN  = Vector2.new(900, 460)
-local MENU_MAX  = Vector2.new(1100, 800)
+local MENU_SIZE = { x=0.50, y=0.85 }
+-- SQUARE window: width and height are at most 800 each (before scaling). To change the size, edit MENU_MAX
+-- (e.g. (900, 900) = bigger square, (700, 700) = smaller). Left pane width is Nav.leftW (see below).
+local MENU_MIN  = Vector2.new(800, 460)
+local MENU_MAX  = Vector2.new(800, 800)
 local MENU_SCALE = 0.95
 
 -- ===================== SOUND SYSTEM =====================
@@ -130,14 +130,15 @@ local sliderSet   = {}
 local curSection    = nil
 local settingsPage  = nil
 
--- масштаб размеров строк, текста и отступов на ПРАВЫХ вкладках (Settings, Themes, Cursor, History).
--- RS.scale — единственное число, которое нужно менять: больше = крупнее и свободнее (1 = как было)
-local RS = { scale = 1.3, pane = nil }
-function RS.n(v)   -- масштабирует число, только если сейчас строится страница правой панели
+-- Scale of row sizes, text and spacing on the RIGHT-hand tabs (Settings, Themes, Cursor, History).
+-- RS.scale is the only number you need to change: bigger = larger and roomier (1 = original size)
+local RS = { scale = 1.1, pane = nil }
+Nav.leftW = 360   -- left pane width (General / your tabs); right pane = window width - 134 - leftW
+function RS.n(v)   -- scales the number only while a right-pane page is being built
     if RS.pane and settingsPage and settingsPage:IsDescendantOf(RS.pane) then return math.floor(v * RS.scale + 0.5) end
     return v
 end
-function RS.f(v) return math.floor(v * RS.scale + 0.5) end  -- масштабирует всегда (для строк, собранных вручную)
+function RS.f(v) return math.floor(v * RS.scale + 0.5) end  -- always scales (for rows built by hand)
 local waitingBind   = nil
 local keybinds      = {}
 local searchHighlighted = {}
@@ -627,7 +628,6 @@ cur.rainbowHue = 0
 cur.rainbowSpeed = 0.4
 
 local ui = {}
-ui.glowColor = Color3.fromRGB(80,255,140)   -- цвет эффекта открытия/закрытия/сворачивания, настраивается в Themes
 ui.rainbow = false
 ui.rainbowHue = 0
 ui.rainbowSpeed = 0.4
@@ -776,7 +776,7 @@ local function autoScaleUI()
         targetScale = math.min(targetScale, math.min(scaleX, scaleY) * MENU_SCALE)
     end
 
-    -- множитель размера от кнопки-точки в верхней панели (1 = как обычно); не даём меню выйти за экран
+    -- size multiplier set by the Menu Size buttons in Settings (1 = normal); keeps the menu from leaving the screen
     local boost = Nav.sizeBoost or 1
     if boost ~= 1 then
         local baseW = math.clamp(MENU_SIZE.x * screenSize.X, MENU_MIN.X, MENU_MAX.X)
@@ -785,11 +785,11 @@ local function autoScaleUI()
         targetScale = math.min(targetScale * boost, math.max(fit, targetScale))
     end
 
-    -- на больших экранах (4K, ТВ 65") меню растёт пропорционально разрешению, а не упирается в MENU_SCALE
-    -- (4 = верхний предел масштаба; на 3840x2160 без кнопки-точки получается примерно x1.9)
+    -- on big screens (4K, 65" TV) the menu grows proportionally to the resolution instead of stopping at MENU_SCALE
+    -- (4 = upper scale limit; on 3840x2160 this gives roughly x1.9 at normal size)
     uiScale.Scale = math.clamp(targetScale, 0.45, 4)
 
-    -- центрируем меню на экране с учётом нового масштаба (используется и при старте, и при открытии через "<" / RightShift)
+    -- center the menu on screen using the new scale (used on startup and when opening via the "<" tab / RightShift)
     local winW = math.clamp(MENU_SIZE.x * screenSize.X, MENU_MIN.X, MENU_MAX.X) * uiScale.Scale
     local winH = math.clamp(MENU_SIZE.y * screenSize.Y, MENU_MIN.Y, MENU_MAX.Y) * uiScale.Scale
     MENU_POS.x = math.clamp((screenSize.X - winW) / 2 / screenSize.X, 0, 1)
@@ -964,11 +964,11 @@ local function tinyArrow(parent)
     corner(a,3); stroke(a,COLORS.line,1,.15); bindCursorHover(a); return a
 end
 
-local genTab=label(subTabBar,"TextLabel",{Size=UDim2.new(0,408,1,0),Text="General",TextSize=12, Category="Labels"})
+local genTab=label(subTabBar,"TextLabel",{Size=UDim2.new(0,Nav.leftW,1,0),Text="General",TextSize=12, Category="Labels"})
 pad(genTab,9); local genArrow=tinyArrow(genTab)
-local prevTab=label(subTabBar,"TextLabel",{Position=UDim2.fromOffset(408,0),Size=UDim2.new(1,-408,1,0),Text="Preview",TextSize=12, Category="Labels"})
+local prevTab=label(subTabBar,"TextLabel",{Position=UDim2.fromOffset(Nav.leftW,0),Size=UDim2.new(1,-Nav.leftW,1,0),Text="Preview",TextSize=12, Category="Labels"})
 pad(prevTab,9); local prevArrow=tinyArrow(prevTab)
-local subDiv=Instance.new("Frame",subTabBar); subDiv.Position=UDim2.fromOffset(408,0)
+local subDiv=Instance.new("Frame",subTabBar); subDiv.Position=UDim2.fromOffset(Nav.leftW,0)
 subDiv.Size=UDim2.fromOffset(1,22); subDiv.BackgroundColor3=COLORS.line; subDiv.BorderSizePixel=0
 
 contentZone=Instance.new("Frame",mainZone)
@@ -977,13 +977,13 @@ contentZone.Size=UDim2.new(1,0,1,-22); contentZone.BorderSizePixel=0
 Track.WindowBG(contentZone)
 
 leftPane=Instance.new("Frame",contentZone)
-leftPane.Name="LeftPane"; leftPane.Size=UDim2.new(0,408,1,0)
+leftPane.Name="LeftPane"; leftPane.Size=UDim2.new(0,Nav.leftW,1,0)
 leftPane.BorderSizePixel=0; leftPane.ClipsDescendants=true
 Track.WindowBG(leftPane)
 activeLeftPane = leftPane -- по умолчанию активна системная левая панель
 
 local leftDivLine=Instance.new("Frame",contentZone)
-leftDivLine.Position=UDim2.fromOffset(408,0); leftDivLine.Size=UDim2.new(0,1,1,0)
+leftDivLine.Position=UDim2.fromOffset(Nav.leftW,0); leftDivLine.Size=UDim2.new(0,1,1,0)
 leftDivLine.BackgroundColor3=Color3.fromRGB(20,20,21); leftDivLine.BorderSizePixel=0
 
 for _,name in ipairs(SIDE_TABS) do
@@ -1030,17 +1030,17 @@ end
 
 -- ===================== RIGHT PANEL =====================
 local rightPane=Instance.new("Frame",contentZone)
-rightPane.Name="RightPane"; rightPane.Position=UDim2.fromOffset(409,0)
-rightPane.Size=UDim2.new(1,-409,1,0); rightPane.BorderSizePixel=0; rightPane.ClipsDescendants=true
+rightPane.Name="RightPane"; rightPane.Position=UDim2.fromOffset(Nav.leftW+1,0)
+rightPane.Size=UDim2.new(1,-(Nav.leftW+1),1,0); rightPane.BorderSizePixel=0; rightPane.ClipsDescendants=true
 Track.WindowBG(rightPane)
 RS.pane = rightPane
 
 local rightTop=Instance.new("Frame",rightPane)
-rightTop.Size=UDim2.new(1,0,0,60); rightTop.BorderSizePixel=0
+rightTop.Size=UDim2.new(1,0,0,54); rightTop.BorderSizePixel=0
 Track.WindowBG(rightTop)
 
 local rTabCont=Instance.new("ScrollingFrame",rightTop)
-rTabCont.Position=UDim2.fromOffset(5,3); rTabCont.Size=UDim2.new(1,-35,0,26); rTabCont.BackgroundTransparency=1
+rTabCont.Position=UDim2.fromOffset(5,3); rTabCont.Size=UDim2.new(1,-35,0,24); rTabCont.BackgroundTransparency=1
 rTabCont.BorderSizePixel=0
 rTabCont.ScrollingDirection=Enum.ScrollingDirection.X
 rTabCont.ScrollBarThickness=3
@@ -1051,15 +1051,15 @@ local rTabLL=Instance.new("UIListLayout",rTabCont)
 rTabLL.FillDirection=Enum.FillDirection.Horizontal; rTabLL.Padding=UDim.new(0,4); rTabLL.SortOrder=Enum.SortOrder.LayoutOrder
 
 local searchFrame=Instance.new("Frame",rightTop)
-searchFrame.Position=UDim2.fromOffset(5,32); searchFrame.Size=UDim2.new(1,-10,0,24)
+searchFrame.Position=UDim2.fromOffset(5,29); searchFrame.Size=UDim2.new(1,-10,0,22)
 searchFrame.BackgroundColor3=Color3.fromRGB(8,8,9); searchFrame.BorderSizePixel=0
 corner(searchFrame,4); stroke(searchFrame,COLORS.lineLight,1,.15)
 
-local searchIcon=label(searchFrame,"TextLabel",{Size=UDim2.fromOffset(22,24),Text="🔍",TextSize=12,TextXAlignment=Enum.TextXAlignment.Center, Category="Labels"})
+local searchIcon=label(searchFrame,"TextLabel",{Size=UDim2.fromOffset(22,22),Text="🔍",TextSize=11,TextXAlignment=Enum.TextXAlignment.Center, Category="Labels"})
 local searchBox=Instance.new("TextBox",searchFrame)
 searchBox.Size=UDim2.new(1,-46,1,0); searchBox.Position=UDim2.fromOffset(22,0)
 searchBox.BackgroundTransparency=1; searchBox.Text=""; searchBox.PlaceholderText="Search elements..."
-searchBox.PlaceholderColor3=COLORS.muted; searchBox.TextColor3=COLORS.text; searchBox.TextSize=13
+searchBox.PlaceholderColor3=COLORS.muted; searchBox.TextColor3=COLORS.text; searchBox.TextSize=12
 searchBox.Font=Enum.Font.Code; searchBox.ClearTextOnFocus=false
 bindCursorHover(searchBox); trackText("Inputs", searchBox); trackColorText(searchBox)
 
@@ -1129,11 +1129,11 @@ searchBox.FocusLost:Connect(function(enter) if enter then doSearch(searchBox.Tex
 clearBtn.MouseButton1Click:Connect(function() playsfx("click"); searchBox.Text=""; searchBox.PlaceholderText="Search elements..."; clearHighlight(); clearBtn.Visible=false end)
 
 for i,name in ipairs(RIGHT_TABS) do
-    local btn=label(rTabCont,"TextButton",{Size=UDim2.fromOffset(80,26),BackgroundTransparency=0,
+    local btn=label(rTabCont,"TextButton",{Size=UDim2.fromOffset(50,24),BackgroundTransparency=0,
         BackgroundColor3=i==1 and COLORS.accent or Color3.fromRGB(8,8,9),Text="",
         TextSize=10,Font=FONTS.bold,AutoButtonColor=false})
     corner(btn,3); stroke(btn,COLORS.lineLight,1,.25); bubble(btn,6,true)
-    local lbl4=label(btn,"TextLabel",{Size=UDim2.new(1,0,1,0),Text=name,TextSize=13,Font=FONTS.bold,
+    local lbl4=label(btn,"TextLabel",{Size=UDim2.new(1,0,1,0),Text=name,TextSize=10,Font=FONTS.bold,
         TextXAlignment=Enum.TextXAlignment.Center,TextColor3=i==1 and COLORS.white or COLORS.text,
         Category="TopTabs"})
     lbl4.ZIndex=10
@@ -1156,7 +1156,7 @@ for i,name in ipairs(RIGHT_TABS) do
     regSearch(name, name, btn)
 
     local pg=Instance.new("ScrollingFrame",rightPane)
-    pg.Name=name.."Page"; pg.Position=UDim2.fromOffset(0,60); pg.Size=UDim2.new(1,0,1,-60)
+    pg.Name=name.."Page"; pg.Position=UDim2.fromOffset(0,54); pg.Size=UDim2.new(1,0,1,-54)
     pg.BorderSizePixel=0
     Track.WindowBG(pg)
     pg.ScrollBarThickness=3; Track.Scrollbar(pg)
@@ -1834,6 +1834,11 @@ local TAB_CONTENT = {
         {"rebind", "Open / Close Menu", TOGGLE_KEY, function(kc)
             TOGGLE_KEY = kc
         end},
+
+        {"section", "Menu Size"},
+        {"button", "Size: Normal", function() Nav.setMenuSize(1) end},
+        {"button", "Size: Large", function() Nav.setMenuSize(1.25) end},
+        {"button", "Size: Extra Large", function() Nav.setMenuSize(1.5) end},
     },
     Themes = {
         {"section", "UI Styling"},
@@ -1850,9 +1855,6 @@ local TAB_CONTENT = {
         {"colorpicker", "Panel Color", COLORS.panel, function(c) setPanel(c) end},
         {"colorpicker", "Panel2 Color", COLORS.panel2, function(c) setPanel2(c) end},
         {"colorpicker", "Scrollbar Color", COLORS.scrollbar, function(c) setScrollbarColor(c) end},
-
-        {"section", "Open / Close Effect"},
-        {"colorpicker", "Effect Glow Color", ui.glowColor, function(c) ui.glowColor = c end},
 
         {"section", "Rainbow"},
         {"toggle", "Rainbow Accent (title, buttons, etc.)", function(v)
@@ -2033,9 +2035,10 @@ glowRing.ZIndex=49
 glowRing.Visible=false
 local glowCorner=corner(glowRing,1000)
 local glowStroke=Instance.new("UIStroke",glowRing)
-glowStroke.Color=ui.glowColor
+glowStroke.Color=COLORS.accent
 glowStroke.Thickness=3
 glowStroke.Transparency=1
+table.insert(Acc.strokes, glowStroke)  -- the effect follows the menu accent color (including rainbow)
 
 -- круглая вспышка (кружок, minimize) — центр в точке, размер растёт как квадрат
 local function pulseGlow(centerPos, startSize, endSize, duration)
@@ -2043,7 +2046,7 @@ local function pulseGlow(centerPos, startSize, endSize, duration)
     glowRing.Position=UDim2.fromOffset(centerPos.X, centerPos.Y)
     glowRing.Size=UDim2.fromOffset(startSize,startSize)
     glowRing.Visible=true
-    glowStroke.Color=ui.glowColor
+    glowStroke.Color=COLORS.accent
     glowStroke.Transparency=0.1
     glowStroke.Thickness=4
     TweenService:Create(glowRing,TweenInfo.new(duration,Enum.EasingStyle.Quad,Enum.EasingDirection.Out),
@@ -2056,54 +2059,61 @@ local function pulseGlow(centerPos, startSize, endSize, duration)
     end)
 end
 
--- прямоугольная вспышка размером с меню (RightShift открытие/закрытие):
--- растёт ИЗ УГЛА окна (а не из центра) до полного размера окна, как разворачивающийся веер
--- cornerAnchor: Vector2 (0,0)=top-left, (1,0)=top-right, (0,1)=bottom-left, (1,1)=bottom-right
-local function pulseGlowRect(cornerPixelPos, cornerAnchor, targetWidth, targetHeight, duration)
-    glowCorner.CornerRadius=UDim.new(0,12)   -- скругление как у самого окна, не идеальный круг
-    glowRing.AnchorPoint=cornerAnchor
-    glowRing.Position=UDim2.fromOffset(cornerPixelPos.X, cornerPixelPos.Y)
-    glowRing.Size=UDim2.fromOffset(targetWidth*0.08, targetHeight*0.08)
-    glowRing.Visible=true
-    glowStroke.Color=ui.glowColor
-    glowStroke.Transparency=0.1
-    glowStroke.Thickness=4
-    TweenService:Create(glowRing,TweenInfo.new(duration,Enum.EasingStyle.Quad,Enum.EasingDirection.Out),
-        {Size=UDim2.fromOffset(targetWidth, targetHeight)}):Play()
-    local fade=TweenService:Create(glowStroke,TweenInfo.new(duration,Enum.EasingStyle.Quad,Enum.EasingDirection.Out),
-        {Transparency=1, Thickness=0.5})
-    fade:Play()
-    fade.Completed:Connect(function()
-        glowRing.Visible=false
-        glowRing.AnchorPoint=Vector2.new(.5,.5)           -- возвращаем центр-якорь по умолчанию
-        glowCorner.CornerRadius=UDim.new(0,1000)          -- возвращаем круглую форму по умолчанию для след. кружка/minimize
+-- Window glow (open / close / minimize / restore). It lives INSIDE the window in a clipped host frame, so it is
+-- measured in the window's own units: it automatically follows every move / resize / UI scale of the window and can
+-- never extend outside the menu frame (an overlay in the ScreenGui could, because its size had to be calculated by hand).
+--   "open"  = the outline starts deep inside the window and ripples OUTWARD to the frame edge while fading
+--   "close" = the outline starts at the frame edge and collapses INWARD while fading
+Nav.wgHost = Instance.new("Frame", window)
+Nav.wgHost.Name = "DyserWindowGlowHost"; Nav.wgHost.Size = UDim2.new(1,0,1,0)
+Nav.wgHost.BackgroundTransparency = 1; Nav.wgHost.BorderSizePixel = 0
+Nav.wgHost.ClipsDescendants = true; Nav.wgHost.Active = false; Nav.wgHost.ZIndex = 100
+Nav.wgRing = Instance.new("Frame", Nav.wgHost)
+Nav.wgRing.Name = "DyserWindowGlow"; Nav.wgRing.BackgroundTransparency = 1; Nav.wgRing.BorderSizePixel = 0
+Nav.wgRing.Active = false; Nav.wgRing.ZIndex = 101; Nav.wgRing.Visible = false
+Nav.wgRing.Size = UDim2.new(1,0,1,0)
+corner(Nav.wgRing, 10)
+Nav.wgStroke = Instance.new("UIStroke", Nav.wgRing)
+Nav.wgStroke.Color = COLORS.accent; Nav.wgStroke.Thickness = 3; Nav.wgStroke.Transparency = 1
+table.insert(Acc.strokes, Nav.wgStroke)   -- follows the menu accent color (including rainbow)
+
+Nav.playGlow = function(kind, duration)
+    Nav.glowToken = (Nav.glowToken or 0) + 1
+    local token = Nav.glowToken
+    local ring, stroke = Nav.wgRing, Nav.wgStroke
+    duration = math.max(duration or .5, .05)
+    stroke.Color = COLORS.accent
+    ring.Visible = true
+    local t0 = os.clock()
+    local conn
+    conn = RunService.RenderStepped:Connect(function()
+        if token ~= Nav.glowToken then conn:Disconnect(); return end   -- a newer effect took over
+        local p = math.clamp((os.clock() - t0) / duration, 0, 1)
+        local sz = window.AbsoluteSize / math.max(uiScale.Scale, 0.01)  -- window size in its own units
+        local minDim = math.max(math.min(sz.X, sz.Y), 8)
+        local depth = (kind == "open") and (1 - p) or p                 -- how far inside the window the outline sits
+        local inset = math.min(3 + minDim*0.18*depth, minDim/2 - 2)
+        ring.Position = UDim2.fromOffset(inset, inset)
+        ring.Size = UDim2.new(1, -2*inset, 1, -2*inset)
+        if kind == "open" then
+            stroke.Transparency = 0.1 + 0.9*p*p
+            stroke.Thickness = math.max(0.5, 5 - 4.5*p)
+        else
+            stroke.Transparency = 0.15 + 0.85*p
+            stroke.Thickness = math.max(0.5, 4 - 3.5*p)
+        end
+        if p >= 1 then
+            conn:Disconnect()
+            ring.Visible = false
+        end
     end)
 end
 
--- "СБОРКА" — обратный эффект: контур стартует размером с окно и СЖИМАЕТСЯ
--- в маленькую точку у заданного угла. Используется при сворачивании (minimize),
--- чтобы создавалось ощущение "меню стягивается и собирается" а не вспыхивает на месте.
-local function pulseGlowShrink(startWidth, startHeight, cornerPixelPos, cornerAnchor, duration)
-    glowCorner.CornerRadius=UDim.new(0,12)
-    glowRing.AnchorPoint=cornerAnchor
-    glowRing.Position=UDim2.fromOffset(cornerPixelPos.X, cornerPixelPos.Y)
-    glowRing.Size=UDim2.fromOffset(startWidth, startHeight)
-    glowRing.Visible=true
-    glowStroke.Color=ui.glowColor
-    glowStroke.Transparency=0.15
-    glowStroke.Thickness=3
-    -- контур сжимается до маленькой точки в углу — будто все края стягиваются туда
-    TweenService:Create(glowRing,TweenInfo.new(duration,Enum.EasingStyle.Quad,Enum.EasingDirection.In),
-        {Size=UDim2.fromOffset(startWidth*0.06, startHeight*0.06)}):Play()
-    local fade=TweenService:Create(glowStroke,TweenInfo.new(duration,Enum.EasingStyle.Quad,Enum.EasingDirection.In),
-        {Transparency=1, Thickness=0.5})
-    fade:Play()
-    fade.Completed:Connect(function()
-        glowRing.Visible=false
-        glowRing.AnchorPoint=Vector2.new(.5,.5)
-        glowCorner.CornerRadius=UDim.new(0,1000)
-    end)
-end
+-- open / restore / expand: the outline ripples outward (old arguments are ignored, only the duration is used)
+local function pulseGlowRect(a1, a2, a3, a4, duration) Nav.playGlow("open", duration or .6) end
+
+-- close / minimize: the outline collapses inward
+local function pulseGlowShrink(a1, a2, a3, a4, duration) Nav.playGlow("close", duration or .5) end
 
 local function expandFromBubble()
     isCollapsed=false
@@ -2304,7 +2314,7 @@ minimizeBtn.MouseButton1Click:Connect(function()
         local shrinkWidth = isMaxed and screenGui.AbsoluteSize.X or fullSize.X.Offset
         -- зелёная вспышка "собирается" из полного размера окна в точку у левого верхнего угла —
         -- эффект стягивания/сборки, синхронный со сжатием самого окна в полоску
-        pulseGlowShrink(window.AbsoluteSize.X, window.AbsoluteSize.Y, Vector2.new(window.AbsolutePosition.X, window.AbsolutePosition.Y), Vector2.new(0,0), .55)
+        pulseGlowShrink(nil, nil, nil, nil, .85)
         local shrink=TweenService:Create(window,TweenInfo.new(.55,Enum.EasingStyle.Quint,Enum.EasingDirection.In), {Size=UDim2.fromOffset(shrinkWidth,30)})
         local savedBodyTransp = body.BackgroundTransparency
         body.BackgroundColor3=COLORS.windowBg
@@ -2323,28 +2333,44 @@ end)
 -- ===================== MAXIMIZE (removed) =====================
 
 -- ===================== DRAG =====================
-local dragging,dragStart,startPosAbs=false,nil,nil
+-- The window is moved with closed-loop correction: every frame we compare where it SHOULD be (where it was when grabbed
+-- + how far the mouse has moved since) with where it ACTUALLY is (AbsolutePosition) and nudge Position by the difference.
+-- Only mouse DELTAS are used, so the result does not depend on the screen inset, the UI scale or the coordinate space,
+-- and the window stays exactly under the cursor at the point where you grabbed it.
+-- (all drag state lives in one table to save local variables: the main chunk is close to the 200-local limit)
+local drag = { on = false, gain = 1 }
 table.insert(scriptConnections,topBar.InputBegan:Connect(function(i)
-    if i.UserInputType==Enum.UserInputType.MouseButton1 then dragging=true; dragStart=i.Position; startPosAbs=window.AbsolutePosition end
-end))
-table.insert(scriptConnections,topBar.InputEnded:Connect(function(i)
-    if i.UserInputType==Enum.UserInputType.MouseButton1 then dragging=false end
-end))
-table.insert(scriptConnections,UserInputService.InputChanged:Connect(function(i)
-    if i.UserInputType==Enum.UserInputType.MouseMovement then
-        if dragging and dragStart then
-            local d=i.Position-dragStart
-            local newX = startPosAbs.X+d.X
-            local newY = startPosAbs.Y+d.Y
-            -- не даём перетащить окно за пределы экрана (особенно вверх,
-            -- чтобы топбар с кнопками не улетал за видимую область)
-            local screenSize = screenGui.AbsoluteSize
-            local winSize = window.AbsoluteSize
-            newX = math.clamp(newX, 0, math.max(0, screenSize.X - winSize.X))
-            newY = math.clamp(newY, 0, math.max(0, screenSize.Y - winSize.Y))
-            window.Position=UDim2.fromOffset(newX,newY)
-        end
+    if i.UserInputType==Enum.UserInputType.MouseButton1 then
+        drag.on=true; drag.mouse0=UserInputService:GetMouseLocation(); drag.win0=window.AbsolutePosition
+        drag.gain=1; drag.lastDelta=nil; drag.lastAbs=nil
     end
+end))
+table.insert(scriptConnections,UserInputService.InputEnded:Connect(function(i)
+    if i.UserInputType==Enum.UserInputType.MouseButton1 then drag.on=false end
+end))
+table.insert(scriptConnections,RunService.RenderStepped:Connect(function()
+    if not drag.on or not drag.mouse0 then return end
+    local screenSize = screenGui.AbsoluteSize
+    local winSize = window.AbsoluteSize
+    local want = drag.win0 + (UserInputService:GetMouseLocation() - drag.mouse0)
+    -- keep the window on screen (especially at the top, so the top bar never leaves the visible area),
+    -- but never snap it if it started partly off-screen
+    want = Vector2.new(
+        math.clamp(want.X, math.min(0, drag.win0.X), math.max(0, screenSize.X - winSize.X, drag.win0.X)),
+        math.clamp(want.Y, math.min(0, drag.win0.Y), math.max(0, screenSize.Y - winSize.Y, drag.win0.Y)))
+    local nowAbs = window.AbsolutePosition
+    -- learn how many absolute pixels the window really moves per 1 unit of Position offset
+    -- (exactly 1 normally; measured here so the drag stays correct even if the UI scale also scales the offset)
+    if drag.lastDelta and drag.lastAbs and drag.lastDelta.Magnitude > 4 then
+        local ratio = (nowAbs - drag.lastAbs).Magnitude / drag.lastDelta.Magnitude
+        if ratio > 0.2 and ratio < 5 then drag.gain = ratio end
+    end
+    local err = want - nowAbs
+    if err.Magnitude < 0.5 then drag.lastDelta = nil; return end
+    local delta = err / drag.gain
+    local pos = window.Position
+    window.Position = UDim2.new(pos.X.Scale, pos.X.Offset + delta.X, pos.Y.Scale, pos.Y.Offset + delta.Y)
+    drag.lastDelta, drag.lastAbs = delta, nowAbs
 end))
 
 -- ===================== TOGGLE KEY =====================
@@ -2394,7 +2420,7 @@ table.insert(scriptConnections,UserInputService.InputBegan:Connect(function(inpu
         end
         if screenGui.Enabled then
             -- зелёная вспышка размером с менюшку, растёт из левого верхнего угла окна
-            pulseGlowRect(Vector2.new(window.AbsolutePosition.X, window.AbsolutePosition.Y), Vector2.new(0,0), window.AbsoluteSize.X, window.AbsoluteSize.Y, .6)
+            pulseGlowShrink(nil, nil, nil, nil, .5)
             local t=TweenService:Create(window,TweenInfo.new(.55,Enum.EasingStyle.Quint,Enum.EasingDirection.In),
              {Size=UDim2.new(MENU_SIZE.x,0,0,0),Position=UDim2.new(MENU_POS.x,0,MENU_POS.y+.1,0)})
             t:Play(); t.Completed:Wait(); screenGui.Enabled=false
@@ -2496,7 +2522,7 @@ if UserInputService.TouchEnabled then
         if not canToggle() then return end
         if screenGui.Enabled then
             -- зелёная вспышка размером с менюшку в момент закрытия (мобильная кнопка)
-            pulseGlowRect(Vector2.new(window.AbsolutePosition.X, window.AbsolutePosition.Y), Vector2.new(0,0), window.AbsoluteSize.X, window.AbsoluteSize.Y, .6)
+            pulseGlowShrink(nil, nil, nil, nil, .5)
             local t=TweenService:Create(window,TweenInfo.new(.55,Enum.EasingStyle.Quint,Enum.EasingDirection.In),
              {Size=UDim2.new(MENU_SIZE.x,0,0,0),Position=UDim2.new(MENU_POS.x,0,MENU_POS.y+.1,0)})
             t:Play(); t.Completed:Wait(); screenGui.Enabled=false
@@ -2532,14 +2558,14 @@ if UserInputService.TouchEnabled then
 end
 end)()
 
--- ===================== DOCK "<" (кнопка рядом с крестиком + боковой язычок, масштаб под 4K) =====================
--- Кнопка "<" рядом с "-" и "x" прячет меню к краю экрана, а язычок "<" у правого края открывает его обратно.
--- Язычок лежит в отдельном ScreenGui, потому что screenGui.Enabled=false скрывает всё, что внутри него.
--- Всё обёрнуто в функцию, чтобы не тратить локальные регистры основного чанка (лимит Luau).
+-- ===================== DOCK "<" (side tab that reopens the menu, scaled for 4K) =====================
+-- When the menu is hidden (RightShift, mobile button, or the collapsed bubble hidden), a "<" tab appears on the right screen edge and reopens it.
+-- The tab lives in a separate ScreenGui because screenGui.Enabled=false hides everything inside it.
+-- Everything is wrapped in a function so it doesn't use up the main chunk's local registers (Luau limit).
 ;(function()
     local oldDock = playerGui:FindFirstChild("DyserDock"); if oldDock then oldDock:Destroy() end
 
-    -- отдельный ScreenGui для язычка
+    -- separate ScreenGui for the tab
     local dockGui = Instance.new("ScreenGui")
     dockGui.Name = "DyserDock"; dockGui.IgnoreGuiInset = true; dockGui.ResetOnSpawn = false
     dockGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
@@ -2556,7 +2582,7 @@ end)()
     local tabStroke = stroke(tab,COLORS.accent,1.5,.2)
     table.insert(Acc.strokes,tabStroke); table.insert(Acc.texts,tab)
 
-    -- масштаб под разрешение: 1080p = x1, 1440p = x1.33, 4K (3840x2160) = x2
+    -- scale for the resolution: 1080p = x1, 1440p = x1.33, 4K (3840x2160) = x2
     local tabScale = Instance.new("UIScale",tab)
     local function rescale()
         local s = dockGui.AbsoluteSize
@@ -2565,9 +2591,9 @@ end)()
     end
     dockGui:GetPropertyChangedSignal("AbsoluteSize"):Connect(rescale); rescale()
 
-    -- язычок виден только пока основное меню скрыто (любым способом: "<", RightShift, мобильная кнопка)
+    -- the tab is visible only while the main menu is hidden (by any means: RightShift, mobile button)
     local function syncTab()
-        -- показываем язычок, если меню скрыто целиком ИЛИ меню свёрнуто в кружок, а сам кружок спрятан (RightShift)
+        -- show the tab if the menu is fully hidden OR it is collapsed into the bubble and the bubble itself is hidden (RightShift)
         local shouldShow = screenGui.Parent ~= nil
             and (not screenGui.Enabled or (isCollapsed and not collapseBubble.Visible))
         if shouldShow and not tab.Visible then
@@ -2580,7 +2606,7 @@ end)()
     end
     screenGui:GetPropertyChangedSignal("Enabled"):Connect(syncTab)
     collapseBubble:GetPropertyChangedSignal("Visible"):Connect(syncTab)
-    -- закрытие по "x" или Delete уничтожает меню — язычок убираем вместе с ним
+    -- closing with "x" or Delete destroys the menu — remove the tab together with it
     screenGui.Destroying:Connect(function() if dockGui then dockGui:Destroy() end end)
 
     tab.MouseEnter:Connect(function()
@@ -2590,11 +2616,11 @@ end)()
         TweenService:Create(tab,TweenInfo.new(.15),{Size=UDim2.fromOffset(TAB_W,TAB_H)}):Play()
     end)
 
-    -- открыть меню обратно (та же анимация, что у RightShift)
+    -- reopen the menu (same animation as RightShift)
     local function openMenu()
         if not screenGui or not screenGui.Parent then return end
         if isCollapsed then
-            -- меню было свёрнуто в кружок, а кружок спрятан: возвращаем кружок и сразу разворачиваем меню
+            -- the menu was collapsed into the bubble and the bubble is hidden: bring the bubble back and expand the menu right away
             if collapseBubble.Visible then return end
             collapseBubble.Size=UDim2.fromOffset(54,54); collapseBubble.BackgroundTransparency=0
             collapseStroke.Transparency=.1; collapseLogo.ImageTransparency=0; collapseLogo.Rotation=0
@@ -2636,34 +2662,18 @@ end)()
     end)
 end)()
 
--- ===================== ВРЕМЕННАЯ КНОПКА-ТОЧКА: размер меню под ТВ (4K, 65") =====================
--- Точка "●" слева от "-" и "x". Каждое нажатие переключает размер: обычный -> крупнее -> ещё крупнее -> обычный.
--- Меню остаётся в пределах экрана и центрируется. Чтобы убрать кнопку — поставь ENABLE_SIZE_DOT = false
--- (или удали весь этот блок до строки STARTUP). Размеры меняются в списке PRESETS.
-;(function()
-    local ENABLE_SIZE_DOT = true
-    if not ENABLE_SIZE_DOT then return end
-    local PRESETS = {1, 1.25, 1.5}   -- множители к авто-масштабу; 1 = обычный размер
-    local idx = 1
-
-    local dot = label(topBar,"TextButton",{AnchorPoint=Vector2.new(1,0),Position=UDim2.new(1,-55,0,5),
-        Size=UDim2.fromOffset(20,20),BackgroundTransparency=0,BackgroundColor3=Color3.fromRGB(8,8,9),
-        Text="●",TextSize=12,Font=Enum.Font.GothamBold,AutoButtonColor=false,Category="Buttons"})
-    corner(dot,4); stroke(dot,COLORS.lineLight,1,.15); bindCursorHover(dot)
-
-    dot.MouseButton1Click:Connect(function()
-        playsfx("click")
-        idx = idx % #PRESETS + 1
-        Nav.sizeBoost = PRESETS[idx]
-        autoScaleUI()  -- пересчитывает масштаб и центр (MENU_POS) с учётом множителя
-        -- плавно переносим окно в новый центр (если меню свёрнуто в полоску — высоту не трогаем)
-        local target = isMin and UDim2.new(MENU_POS.x,0,window.Position.Y.Scale,window.Position.Y.Offset)
-            or UDim2.new(MENU_POS.x,0,MENU_POS.y,0)
-        TweenService:Create(window,TweenInfo.new(.3,Enum.EasingStyle.Quint,Enum.EasingDirection.Out),{Position=target}):Play()
-        dot.TextColor3 = (idx > 1) and COLORS.accent or COLORS.text
-        AddLog("Размер меню: x"..tostring(PRESETS[idx]), COLORS.accent)
-    end)
-end)()
+-- ===================== MENU SIZE (used by the three buttons in Settings > Menu Size) =====================
+-- mult is a multiplier on top of the automatic scale (1 = normal). The menu stays on screen and is re-centered.
+Nav.setMenuSize = function(mult)
+    if isMaxed then return end   -- a maximized window already fills the screen
+    Nav.sizeBoost = mult
+    autoScaleUI()   -- recalculates the scale and the centered position (MENU_POS) using the multiplier
+    -- smoothly move the window to its new center (if the menu is minimized to a strip, keep its vertical position)
+    local target = isMin and UDim2.new(MENU_POS.x,0,window.Position.Y.Scale,window.Position.Y.Offset)
+        or UDim2.new(MENU_POS.x,0,MENU_POS.y,0)
+    TweenService:Create(window,TweenInfo.new(.3,Enum.EasingStyle.Quint,Enum.EasingDirection.Out),{Position=target}):Play()
+    AddLog("Menu size: x"..tostring(mult), COLORS.accent)
+end
 
 -- ===================== STARTUP =====================
 spawn(function()
@@ -2823,7 +2833,7 @@ local function createTopTabBtn(name)
     -- Отдельный leftPane (контейнер страниц) для этой верхней вкладки
     local apiLeftPane = Instance.new("Frame", contentZone)
     apiLeftPane.Name = name.."_LeftPane"
-    apiLeftPane.Size = UDim2.new(0, 408, 1, 0)
+    apiLeftPane.Size = UDim2.new(0, Nav.leftW, 1, 0)
     apiLeftPane.BorderSizePixel = 0
     apiLeftPane.ClipsDescendants = true
     apiLeftPane.Visible = false
@@ -2885,7 +2895,7 @@ local function createSideTabEntry(topName, sideName)
     local data = apiSidePanels[topName]
     if not data then return Instance.new("ScrollingFrame") end
 
-    local page -- объявляем заранее: используется в hover-функциях ниже, а создаётся чуть позже
+    local page -- declared in advance: used in the hover functions below, created a bit later
     local btn = label(data.panel, "TextButton", {
         Size = UDim2.new(1, 0, 0, SIZES.rowH),
         BackgroundColor3 = Color3.fromRGB(17,17,18),
