@@ -132,8 +132,9 @@ local settingsPage  = nil
 
 -- Scale of row sizes, text and spacing on the RIGHT-hand tabs (Settings, Themes, Cursor, History).
 -- RS.scale is the only number you need to change: bigger = larger and roomier (1 = original size)
-local RS = { scale = 1.1, pane = nil }
+local RS = { scale = (UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled) and 1.4 or 1.1, pane = nil }   -- touch devices: taller rows
 Nav.leftW = 360   -- left pane width (General / your tabs); right pane = window width - 134 - leftW
+Nav.fitToScreen = true   -- true: the menu never grows past the screen edges; false: the biggest sizes may exceed the screen
 function RS.n(v)   -- scales the number only while a right-pane page is being built
     if RS.pane and settingsPage and settingsPage:IsDescendantOf(RS.pane) then return math.floor(v * RS.scale + 0.5) end
     return v
@@ -759,15 +760,54 @@ szLim.MinSize = MENU_MIN; szLim.MaxSize = MENU_MAX
 -- proportionally to the actual window size relative to this
 local REF_SCREEN = Vector2.new(1920, 1080)
 
+-- ===================== DEVICE DETECTION =====================
+-- Works out what kind of device the menu is running on, so the menu can fit itself to it:
+--   Console = TV / gamepad interface      Phone / Tablet = touch without a keyboard (told apart by screen size)
+--   PC      = everything else (keyboard + mouse, also a PC plugged into a TV)
+-- NOTE: Roblox only reports the screen size in PIXELS, never its physical size. A PC connected to a 65" 4K TV looks exactly
+-- like a PC with a 4K monitor, so that case cannot be detected: pick the size yourself in Settings > Menu Size.
+Nav.profileScale = { PC = 1, Tablet = 1, Phone = 1, Console = 1.3 }   -- extra scale per device kind (a console is viewed from a sofa)
+Nav.detectDevice = function(viewport)
+    local UIS = UserInputService
+    local tenFoot = false
+    pcall(function() tenFoot = game:GetService("GuiService"):IsTenFootInterface() end)
+    local kind
+    if tenFoot then
+        kind = "Console"
+    elseif UIS.TouchEnabled and not UIS.KeyboardEnabled then
+        kind = (math.min(viewport.X, viewport.Y) < 600) and "Phone" or "Tablet"
+    else
+        kind = "PC"
+    end
+    local inputs = {}
+    if UIS.KeyboardEnabled then table.insert(inputs, UIS.MouseEnabled and "Keyboard + Mouse" or "Keyboard") end
+    if UIS.TouchEnabled then table.insert(inputs, "Touch") end
+    if UIS.GamepadEnabled then table.insert(inputs, "Gamepad") end
+    return { kind = kind, input = (#inputs > 0) and table.concat(inputs, " / ") or "Unknown" }
+end
+
 local function autoScaleUI()
     local screenSize = screenGui.AbsoluteSize
     if screenSize.X == 0 or screenSize.Y == 0 then return end
+    Nav.device = Nav.detectDevice(screenSize)   -- re-checked on every screen change (rotation, window resize)
+
+    -- the window's size at scale 1 (after the size limits) and the biggest scale at which it still fits the screen
+    local baseW = math.clamp(MENU_SIZE.x * screenSize.X, MENU_MIN.X, MENU_MAX.X)
+    local baseH = math.clamp(MENU_SIZE.y * screenSize.Y, MENU_MIN.Y, MENU_MAX.Y)
+    local fit = math.min(screenSize.X * 0.96 / baseW, screenSize.Y * 0.96 / baseH)
 
     -- proportional scale based on how big the Roblox window currently is
     local propScale = math.min(screenSize.X / REF_SCREEN.X, screenSize.Y / REF_SCREEN.Y) * MENU_SCALE
 
     local targetScale = propScale
     local padding = 40
+
+    -- phones / tablets have small screens, where the proportional scale would make the menu tiny:
+    -- use the biggest scale (up to MENU_SCALE) at which the menu still fits the screen
+    local kind = Nav.device.kind
+    if (kind == "Phone" or kind == "Tablet") and targetScale < math.min(fit, MENU_SCALE) then
+        targetScale = math.min(fit, MENU_SCALE)
+    end
 
     -- still shrink further if the window gets too small for the menu's min size
     if screenSize.X < (MENU_MIN.X + padding) or screenSize.Y < (MENU_MIN.Y + padding) then
@@ -776,24 +816,41 @@ local function autoScaleUI()
         targetScale = math.min(targetScale, math.min(scaleX, scaleY) * MENU_SCALE)
     end
 
-    -- size multiplier set by the Menu Size buttons in Settings (1 = normal); keeps the menu from leaving the screen
+    -- device profile (e.g. a console is viewed from far away, so it starts bigger); never past the screen edges
+    local profile = Nav.profileScale[kind] or 1
+    if profile ~= 1 then
+        if Nav.fitToScreen == false then
+            targetScale = targetScale * profile
+        else
+            targetScale = math.min(targetScale * profile, math.max(fit, targetScale))
+        end
+    end
+
+    -- size multiplier chosen in Settings > Menu Size (1 = normal, up to 2)
     local boost = Nav.sizeBoost or 1
+    Nav.normalScale = targetScale
     if boost ~= 1 then
-        local baseW = math.clamp(MENU_SIZE.x * screenSize.X, MENU_MIN.X, MENU_MAX.X)
-        local baseH = math.clamp(MENU_SIZE.y * screenSize.Y, MENU_MIN.Y, MENU_MAX.Y)
-        local fit = math.min(screenSize.X * 0.96 / baseW, screenSize.Y * 0.96 / baseH)
-        targetScale = math.min(targetScale * boost, math.max(fit, targetScale))
+        if Nav.fitToScreen == false then
+            targetScale = targetScale * boost   -- no screen limit: the menu may grow past the screen edges
+        else
+            -- keep the menu inside the screen: never grow beyond 96% of the screen width / height
+            targetScale = math.min(targetScale * boost, math.max(fit, targetScale))
+        end
     end
 
     -- on big screens (4K, 65" TV) the menu grows proportionally to the resolution instead of stopping at MENU_SCALE
-    -- (4 = upper scale limit; on 3840x2160 this gives roughly x1.9 at normal size)
-    uiScale.Scale = math.clamp(targetScale, 0.45, 4)
+    -- (6 = upper scale limit; on 3840x2160 this gives roughly x1.9 at normal size)
+    uiScale.Scale = math.clamp(targetScale, 0.45, 6)
+    Nav.effectiveBoost = uiScale.Scale / math.max(Nav.normalScale, 0.001)   -- what was really applied (can be lower than asked)
 
     -- center the menu on screen using the new scale (used on startup and when opening via the "<" tab / RightShift)
-    local winW = math.clamp(MENU_SIZE.x * screenSize.X, MENU_MIN.X, MENU_MAX.X) * uiScale.Scale
-    local winH = math.clamp(MENU_SIZE.y * screenSize.Y, MENU_MIN.Y, MENU_MAX.Y) * uiScale.Scale
+    local winW = baseW * uiScale.Scale
+    local winH = baseH * uiScale.Scale
     MENU_POS.x = math.clamp((screenSize.X - winW) / 2 / screenSize.X, 0, 1)
     MENU_POS.y = math.clamp((screenSize.Y - winH) / 2 / screenSize.Y, 0, 1)
+
+    -- after a screen change (rotation, window resize) make sure an open menu is not left off-screen
+    if Nav.keepOnScreen then task.delay(0.15, Nav.keepOnScreen) end
 end
 screenGui:GetPropertyChangedSignal("AbsoluteSize"):Connect(autoScaleUI)
 task.spawn(autoScaleUI)
@@ -1827,6 +1884,79 @@ local function addColorPicker(txt, defaultCol, cb)
     updateUI()
 end
 
+-- Dropdown: a row that shows the current choice; click it to open a list under it, click an option to pick it.
+-- opts = list of strings, startIdx = initially selected index, cb(index, text) is called when the choice changes.
+local function addDropdown(txt, opts, startIdx, cb)
+    local collapsedHeight = RS.n(28)
+    local itemH = RS.n(24)
+    local expandedHeight = collapsedHeight + #opts * itemH + 6
+    local row = makeRow(28)
+    row.ClipsDescendants = true
+
+    local lbl = rowLabel(row, txt, "Labels")
+    lbl.Size = UDim2.new(.4, 0, 0, collapsedHeight)
+    lbl.TextYAlignment = Enum.TextYAlignment.Center
+    if curSection then regSearch(txt, curSection.name, row) end
+
+    local selected = math.clamp(startIdx or 1, 1, #opts)
+    local expanded = false
+
+    -- header button: shows the current choice
+    local btn = label(row, "TextButton", {AnchorPoint=Vector2.new(1,0), Position=UDim2.new(1,-6,0,RS.n(3)),
+        Size=UDim2.new(.56,0,0,collapsedHeight - RS.n(6)), BackgroundTransparency=0, BackgroundColor3=Color3.fromRGB(15,15,16),
+        Text="", TextSize=RS.n(11), Font=Enum.Font.Code, AutoButtonColor=false, Category="Inputs"})
+    corner(btn, 4); stroke(btn, COLORS.lineLight, 1, .2); bindCursorHover(btn)
+    local btnText = label(btn, "TextLabel", {Position=UDim2.fromOffset(8,0), Size=UDim2.new(1,-RS.n(26),1,0),
+        Text=opts[selected], TextSize=RS.n(11), Font=Enum.Font.Code, TextXAlignment=Enum.TextXAlignment.Left,
+        TextTruncate=Enum.TextTruncate.AtEnd, Category="Inputs"})
+    local arrow = label(btn, "TextLabel", {AnchorPoint=Vector2.new(1,.5), Position=UDim2.new(1,-6,.5,0),
+        Size=UDim2.fromOffset(RS.n(14),RS.n(14)), Text="v", TextSize=RS.n(11), Font=FONTS.bold,
+        TextColor3=COLORS.accent, TextXAlignment=Enum.TextXAlignment.Center, Category="Buttons"})
+    table.insert(Acc.texts, arrow)
+
+    -- option buttons live inside the row, under the header (the row is clipped, so they only show when it is expanded)
+    local items = {}
+    local function refresh()
+        for i, it in ipairs(items) do
+            local sel = (i == selected)
+            it.Text = (sel and "✓ " or "   ") .. opts[i]
+            it.BackgroundColor3 = sel and Color3.fromRGB(28,28,34) or Color3.fromRGB(12,12,14)
+            it.Font = sel and FONTS.bold or Enum.Font.Code
+        end
+        btnText.Text = opts[selected]
+    end
+    local function setExpanded(v)
+        expanded = v
+        arrow.Text = v and "^" or "v"
+        if v then for _, it in ipairs(items) do it.Visible = true end end
+        TweenService:Create(row, TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+            {Size = UDim2.new(1, 0, 0, v and expandedHeight or collapsedHeight)}):Play()
+        if not v then
+            task.delay(0.25, function()
+                if not expanded then for _, it in ipairs(items) do it.Visible = false end end
+            end)
+        end
+    end
+    for i = 1, #opts do
+        local it = label(row, "TextButton", {Position=UDim2.new(0,6,0,collapsedHeight + 2 + (i-1)*itemH),
+            Size=UDim2.new(1,-12,0,itemH - 2), BackgroundTransparency=0, BackgroundColor3=Color3.fromRGB(12,12,14),
+            Text="", TextSize=RS.n(11), Font=Enum.Font.Code, TextXAlignment=Enum.TextXAlignment.Left,
+            AutoButtonColor=false, Category="Inputs"})
+        it.Visible = false
+        corner(it, 3); bindCursorHover(it)
+        it.MouseButton1Click:Connect(function()
+            selected = i
+            refresh()
+            playsfx("click")
+            setExpanded(false)
+            if cb then cb(i, opts[i]) end
+        end)
+        items[i] = it
+    end
+    refresh()
+    btn.MouseButton1Click:Connect(function() playsfx("click"); setExpanded(not expanded) end)
+end
+
 -- ===================== TAB CONTENT =====================
 local TAB_CONTENT = {
     Settings = {
@@ -1836,9 +1966,17 @@ local TAB_CONTENT = {
         end},
 
         {"section", "Menu Size"},
-        {"button", "Size: Normal", function() Nav.setMenuSize(1) end},
-        {"button", "Size: Large", function() Nav.setMenuSize(1.25) end},
-        {"button", "Size: Extra Large", function() Nav.setMenuSize(1.5) end},
+        -- click the row to open the list of sizes; the number is a multiplier on top of the automatic screen scale
+        {"dropdown", "Size", {"Small (x0.75)", "Auto (x1)", "Large (x1.25)", "Extra Large (x1.5)", "Huge (x1.75)", "Maximum (x2)"}, 2, function(i)
+            Nav.setMenuSize(({0.75, 1, 1.25, 1.5, 1.75, 2})[i])
+        end},
+
+        {"section", "Server"},
+        {"button", "Rejoin", function() Nav.rejoin() end},
+
+        {"section", "Overlay"},
+        -- small window in the top-left corner: FPS, ping, time, session (the callback also runs once at build time, hence the check)
+        {"toggle", "Stats Window", function(on) if Nav.setStats then Nav.setStats(on) end end},
     },
     Themes = {
         {"section", "UI Styling"},
@@ -1951,6 +2089,7 @@ local function buildPage(page,rows,tabName)
         elseif r[1]=="colorpicker"  then addColorPicker(r[2],r[3],r[4])
         elseif r[1]=="keybind"      then addKeybind(r[2],r[3],r[4])
         elseif r[1]=="rebind"       then addRebindOnly(r[2],r[3],r[4])
+        elseif r[1]=="dropdown"     then addDropdown(r[2],r[3],r[4],r[5])
         end
     end
 end
@@ -2031,7 +2170,7 @@ glowRing.AnchorPoint=Vector2.new(.5,.5)
 glowRing.Size=UDim2.fromOffset(40,40)
 glowRing.BackgroundTransparency=1
 glowRing.BorderSizePixel=0
-glowRing.ZIndex=49
+glowRing.ZIndex=60   -- above the collapsed bubble (ZIndex 50), so the effect is drawn ON the bubble, not behind it
 glowRing.Visible=false
 local glowCorner=corner(glowRing,1000)
 local glowStroke=Instance.new("UIStroke",glowRing)
@@ -2120,7 +2259,7 @@ local function expandFromBubble()
     playsfx("open")
 
     -- зелёная вспышка-кольцо точно по центру кружка в момент его исчезновения
-    pulseGlow(Vector2.new(collapseBubble.AbsolutePosition.X+collapseBubble.AbsoluteSize.X/2, collapseBubble.AbsolutePosition.Y+collapseBubble.AbsoluteSize.Y/2), 20, 110, .5)
+    pulseGlow(Vector2.new(collapseBubble.AbsolutePosition.X+collapseBubble.AbsoluteSize.X/2, collapseBubble.AbsolutePosition.Y+collapseBubble.AbsoluteSize.Y/2), 54, 130, .5)
 
     -- 1. пузырь медленно "сжимается" и тает, лого прокручивается напоследок
     local shrink = TweenService:Create(collapseBubble, TweenInfo.new(.32,Enum.EasingStyle.Quad,Enum.EasingDirection.In),
@@ -2221,7 +2360,7 @@ local function collapseToCircle()
 
     -- зелёная вспышка-кольцо точно по центру того места, где появится кружок
     -- (финальный размер кружка 54x54, поэтому центр = позиция + 27)
-    pulseGlow(Vector2.new(collapseBubble.Position.X.Offset+27, collapseBubble.Position.Y.Offset+27), 30, 130, .6)
+    pulseGlow(Vector2.new(collapseBubble.Position.X.Offset+27, collapseBubble.Position.Y.Offset+27), 54, 140, .6)
 
     TweenService:Create(collapseBubble,TweenInfo.new(.55,Enum.EasingStyle.Back,Enum.EasingDirection.Out),
         {Size=UDim2.fromOffset(54,54), BackgroundTransparency=0}):Play()
@@ -2339,20 +2478,28 @@ end)
 -- and the window stays exactly under the cursor at the point where you grabbed it.
 -- (all drag state lives in one table to save local variables: the main chunk is close to the 200-local limit)
 local drag = { on = false, gain = 1 }
+-- current pointer position: the finger that started the drag (touch) or the mouse
+drag.point = function()
+    if drag.touch then return Vector2.new(drag.touch.Position.X, drag.touch.Position.Y) end
+    return UserInputService:GetMouseLocation()
+end
 table.insert(scriptConnections,topBar.InputBegan:Connect(function(i)
-    if i.UserInputType==Enum.UserInputType.MouseButton1 then
-        drag.on=true; drag.mouse0=UserInputService:GetMouseLocation(); drag.win0=window.AbsolutePosition
+    local t = i.UserInputType
+    if t==Enum.UserInputType.MouseButton1 or t==Enum.UserInputType.Touch then
+        drag.on=true; drag.touch=(t==Enum.UserInputType.Touch) and i or nil
+        drag.mouse0=drag.point(); drag.win0=window.AbsolutePosition
         drag.gain=1; drag.lastDelta=nil; drag.lastAbs=nil
     end
 end))
 table.insert(scriptConnections,UserInputService.InputEnded:Connect(function(i)
-    if i.UserInputType==Enum.UserInputType.MouseButton1 then drag.on=false end
+    local t = i.UserInputType
+    if t==Enum.UserInputType.MouseButton1 or (t==Enum.UserInputType.Touch and i==drag.touch) then drag.on=false; drag.touch=nil end
 end))
 table.insert(scriptConnections,RunService.RenderStepped:Connect(function()
     if not drag.on or not drag.mouse0 then return end
     local screenSize = screenGui.AbsoluteSize
     local winSize = window.AbsoluteSize
-    local want = drag.win0 + (UserInputService:GetMouseLocation() - drag.mouse0)
+    local want = drag.win0 + (drag.point() - drag.mouse0)
     -- keep the window on screen (especially at the top, so the top bar never leaves the visible area),
     -- but never snap it if it started partly off-screen
     want = Vector2.new(
@@ -2394,7 +2541,7 @@ table.insert(scriptConnections,UserInputService.InputBegan:Connect(function(inpu
         if isCollapsed then
             -- меню свёрнуто в кружок: RightShift прячет/показывает именно кружок, круглым эффектом
             if collapseBubble.Visible then
-                pulseGlow(Vector2.new(collapseBubble.AbsolutePosition.X+collapseBubble.AbsoluteSize.X/2, collapseBubble.AbsolutePosition.Y+collapseBubble.AbsoluteSize.Y/2), 20, 100, .5)
+                pulseGlow(Vector2.new(collapseBubble.AbsolutePosition.X+collapseBubble.AbsoluteSize.X/2, collapseBubble.AbsolutePosition.Y+collapseBubble.AbsoluteSize.Y/2), 54, 120, .5)
                 local t=TweenService:Create(collapseBubble,TweenInfo.new(.3,Enum.EasingStyle.Quad,Enum.EasingDirection.In),
                     {Size=UDim2.fromOffset(10,10), BackgroundTransparency=1})
                 TweenService:Create(collapseStroke,TweenInfo.new(.3,Enum.EasingStyle.Quad,Enum.EasingDirection.In),{Transparency=1}):Play()
@@ -2409,7 +2556,7 @@ table.insert(scriptConnections,UserInputService.InputBegan:Connect(function(inpu
                 collapseLogo.ImageTransparency=1
                 -- центр считаем по ФИНАЛЬНОМУ размеру кружка (54x54), а не по
                 -- временному стартовому (10x10) — иначе вспышка окажется не на месте
-                pulseGlow(Vector2.new(collapseBubble.AbsolutePosition.X+27, collapseBubble.AbsolutePosition.Y+27), 10, 100, .5)
+                pulseGlow(Vector2.new(collapseBubble.AbsolutePosition.X+27, collapseBubble.AbsolutePosition.Y+27), 54, 120, .5)
                 TweenService:Create(collapseBubble,TweenInfo.new(.4,Enum.EasingStyle.Back,Enum.EasingDirection.Out),
                     {Size=UDim2.fromOffset(54,54), BackgroundTransparency=0}):Play()
                 TweenService:Create(collapseStroke,TweenInfo.new(.4,Enum.EasingStyle.Quad,Enum.EasingDirection.Out),{Transparency=.1}):Play()
@@ -2668,12 +2815,287 @@ Nav.setMenuSize = function(mult)
     if isMaxed then return end   -- a maximized window already fills the screen
     Nav.sizeBoost = mult
     autoScaleUI()   -- recalculates the scale and the centered position (MENU_POS) using the multiplier
+    if Nav.refreshDevice then Nav.refreshDevice() end
     -- smoothly move the window to its new center (if the menu is minimized to a strip, keep its vertical position)
     local target = isMin and UDim2.new(MENU_POS.x,0,window.Position.Y.Scale,window.Position.Y.Offset)
         or UDim2.new(MENU_POS.x,0,MENU_POS.y,0)
     TweenService:Create(window,TweenInfo.new(.3,Enum.EasingStyle.Quint,Enum.EasingDirection.Out),{Position=target}):Play()
-    AddLog("Menu size: x"..tostring(mult), COLORS.accent)
+    -- if the screen is too small for the asked size, say what was really applied
+    local eff = Nav.effectiveBoost or mult
+    if math.abs(eff - mult) > 0.02 then
+        AddLog(string.format("Menu size: x%s (limited by the screen to x%.2f)", tostring(mult), eff), COLORS.accent)
+    else
+        AddLog("Menu size: x"..tostring(mult), COLORS.accent)
+    end
 end
+
+-- ===================== KEEP ON SCREEN (after rotation / window resize) =====================
+Nav.keepOnScreen = function()
+    if not screenGui or not screenGui.Parent or not window.Visible or isMaxed or isCollapsed then return end
+    local screenSize = screenGui.AbsoluteSize
+    local pos, size = window.AbsolutePosition, window.AbsoluteSize
+    local x = math.clamp(pos.X, 0, math.max(0, screenSize.X - size.X))
+    local y = math.clamp(pos.Y, 0, math.max(0, screenSize.Y - size.Y))
+    if math.abs(x - pos.X) < 1 and math.abs(y - pos.Y) < 1 then return end
+    local p = window.Position
+    TweenService:Create(window, TweenInfo.new(.25, Enum.EasingStyle.Quint, Enum.EasingDirection.Out),
+        {Position = UDim2.new(p.X.Scale, p.X.Offset + (x - pos.X), p.Y.Scale, p.Y.Offset + (y - pos.Y))}):Play()
+end
+
+-- ===================== REJOIN (Settings > Server > Rejoin) =====================
+-- Rejoins the same server when other players are in it; if you are alone there, joins a fresh server of the same place.
+Nav.rejoin = function()
+    if Nav.rejoining then return end
+    Nav.rejoining = true
+    local Players = game:GetService("Players")
+    local TeleportService = game:GetService("TeleportService")
+    AddLog("Rejoining...", COLORS.accent)
+    local ok, err = pcall(function()
+        if #Players:GetPlayers() <= 1 then
+            TeleportService:Teleport(game.PlaceId, Players.LocalPlayer)
+        else
+            TeleportService:TeleportToPlaceInstance(game.PlaceId, game.JobId, Players.LocalPlayer)
+        end
+    end)
+    if not ok then
+        AddLog("Rejoin failed: "..tostring(err), COLORS.pink)
+        Nav.rejoining = false   -- allow another try (teleport can fail, e.g. inside Studio)
+    else
+        task.delay(10, function() Nav.rejoining = false end)   -- teleport started; unlock again if we are still here
+    end
+end
+
+-- ===================== STATS WINDOW (FPS / Ping / Time / Session) =====================
+-- A small menu-styled window in the top-left corner. It is switched on and off by Settings > Overlay > Stats Window.
+-- It lives in its own ScreenGui, so it stays visible while the main menu is hidden, and it is removed together with the menu.
+--   FPS     = frames per second (smoothed)
+--   Ping    = round-trip time to the server in ms
+--   Time    = your local clock
+--   Session = how long you have been in this game (time since you joined)
+;(function()
+    local StatsService = game:GetService("Stats")
+    local Players = game:GetService("Players")
+    local GREEN, YELLOW, RED = Color3.fromRGB(70,230,120), Color3.fromRGB(255,200,60), Color3.fromRGB(255,90,90)
+
+    local oldGui = playerGui:FindFirstChild("DyserStats"); if oldGui then oldGui:Destroy() end
+    local gui = Instance.new("ScreenGui")
+    gui.Name = "DyserStats"; gui.ResetOnSpawn = false; gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    gui.DisplayOrder = 2147483646; gui.Enabled = false   -- IgnoreGuiInset stays false: the window sits below Roblox's top bar
+    gui.Parent = playerGui
+
+    local frame = Instance.new("Frame", gui)
+    frame.Name = "StatsWindow"; frame.Position = UDim2.fromOffset(12,12); frame.Size = UDim2.fromOffset(200,108)
+    frame.BorderSizePixel = 0; frame.Active = false
+    Track.WindowBG(frame); frame.BackgroundTransparency = .04
+    corner(frame, 8)
+    table.insert(Acc.strokes, stroke(frame, COLORS.accent, 1.5, .25))
+
+    -- scale with the screen like the menu does: 1080p = x1, 4K = x2
+    local scale = Instance.new("UIScale", frame)
+    local function rescale()
+        local sz = gui.AbsoluteSize
+        if sz.X == 0 or sz.Y == 0 then return end
+        scale.Scale = math.clamp(math.min(sz.X/1920, sz.Y/1080), 1, 3)
+    end
+    gui:GetPropertyChangedSignal("AbsoluteSize"):Connect(rescale); rescale()
+
+    local title = label(frame, "TextLabel", {Position=UDim2.fromOffset(10,4), Size=UDim2.new(1,-20,0,20), Text=MENU_NAME,
+        TextSize=12, Font=Enum.Font.Michroma, TextColor3=COLORS.accent, TextXAlignment=Enum.TextXAlignment.Left})
+    table.insert(Acc.texts, title)
+    local sep = Instance.new("Frame", frame)
+    sep.Position = UDim2.fromOffset(8,27); sep.Size = UDim2.new(1,-16,0,1); sep.BackgroundColor3 = COLORS.line; sep.BorderSizePixel = 0
+
+    local names = {"FPS", "Ping", "Time", "Session"}
+    local values = {}
+    for i, name in ipairs(names) do
+        local y = 32 + (i-1) * 18
+        label(frame, "TextLabel", {Position=UDim2.fromOffset(10,y), Size=UDim2.new(.4,0,0,18), Text=name, TextSize=12,
+            Font=Enum.Font.Code, TextColor3=COLORS.muted, TextXAlignment=Enum.TextXAlignment.Left})
+        values[i] = label(frame, "TextLabel", {AnchorPoint=Vector2.new(1,0), Position=UDim2.new(1,-10,0,y), Size=UDim2.new(.6,-10,0,18),
+            Text="-", TextSize=12, Font=Enum.Font.Code, TextColor3=COLORS.text, TextXAlignment=Enum.TextXAlignment.Right})
+    end
+
+    local function getPing()
+        local ok, v = pcall(function() return StatsService.Network.ServerStatsItem["Data Ping"]:GetValue() end)
+        if ok and type(v) == "number" then return v end
+        local ok2, p = pcall(function() return Players.LocalPlayer:GetNetworkPing() * 1000 end)
+        if ok2 and type(p) == "number" then return p end
+        return nil
+    end
+    local function fmtTime(sec)
+        sec = math.max(0, math.floor(sec))
+        return string.format("%02d:%02d:%02d", math.floor(sec/3600), math.floor((sec%3600)/60), sec%60)
+    end
+    local function update(fps)
+        values[1].Text = tostring(fps)
+        values[1].TextColor3 = fps >= 50 and GREEN or (fps >= 30 and YELLOW or RED)
+        local ping = getPing()
+        if ping then
+            values[2].Text = string.format("%d ms", math.floor(ping + 0.5))
+            values[2].TextColor3 = ping <= 80 and GREEN or (ping <= 150 and YELLOW or RED)
+        else
+            values[2].Text = "N/A"; values[2].TextColor3 = COLORS.muted
+        end
+        values[3].Text = os.date("%H:%M:%S")
+        values[4].Text = fmtTime(time())
+    end
+
+    local conn
+    Nav.setStats = function(on)
+        gui.Enabled = on and true or false
+        if conn then conn:Disconnect(); conn = nil end
+        if not on then return end
+        local frames, acc, shown = 0, 0, 0
+        update(0)
+        conn = RunService.RenderStepped:Connect(function(dt)
+            frames = frames + 1; acc = acc + dt
+            if acc >= 0.25 then
+                local inst = frames / acc
+                shown = (shown == 0) and inst or (shown * 0.5 + inst * 0.5)   -- smooth the number so it does not jitter
+                frames, acc = 0, 0
+                update(math.floor(shown + 0.5))
+            end
+        end)
+    end
+
+    -- closing the menu with "x" / Delete destroys it: remove the stats window with it
+    screenGui.Destroying:Connect(function()
+        if conn then conn:Disconnect(); conn = nil end
+        gui:Destroy()
+    end)
+end)()
+
+-- ===================== INFO TAB (player + game information) =====================
+-- Player: avatar headshot, display name, username, user ID, account creation date and age.
+-- Game: icon, name, place ID, universe ID, server (job) ID.
+-- Click any ID / name value to copy it (needs setclipboard from your executor). Wrapped in a function to save locals.
+;(function()
+    local page = Nav.rightTabPgs["Info"]
+    if not page then return end
+    local Players = game:GetService("Players")
+    local MarketplaceService = game:GetService("MarketplaceService")
+    local lp = Players.LocalPlayer
+    local order = 0
+    local function nextOrder() order = order + 1; return order end
+
+    -- section header (same look as "Sound Feedback" in Settings)
+    local function header(text)
+        local f = Instance.new("Frame", page)
+        f.Size = UDim2.new(1,0,0,RS.f(22)); f.BackgroundColor3 = Color3.fromRGB(10,10,13)
+        f.BorderSizePixel = 0; f.LayoutOrder = nextOrder(); corner(f,3)
+        local l = label(f,"TextLabel",{Size=UDim2.new(1,-8,1,0),Position=UDim2.fromOffset(6,0),Text=text,
+            TextSize=RS.f(11),Font=FONTS.bold,TextColor3=COLORS.accent,TextXAlignment=Enum.TextXAlignment.Left,Category="Labels"})
+        table.insert(Acc.texts, l)
+        return f
+    end
+
+    -- big card: picture on the left, title + subtitle on the right
+    local function card(imageUrl, title, subtitle)
+        local f = Instance.new("Frame", page)
+        f.Size = UDim2.new(1,0,0,RS.f(72)); f.BackgroundColor3 = Color3.fromRGB(8,8,10); f.BackgroundTransparency = .1
+        f.BorderSizePixel = 0; f.LayoutOrder = nextOrder(); corner(f,4)
+        local size = RS.f(56)
+        local img = Instance.new("ImageLabel", f)
+        img.AnchorPoint = Vector2.new(0,.5); img.Position = UDim2.new(0,8,.5,0); img.Size = UDim2.fromOffset(size,size)
+        img.BackgroundColor3 = Color3.fromRGB(16,16,18); img.BorderSizePixel = 0
+        img.ScaleType = Enum.ScaleType.Crop; img.Image = imageUrl or ""
+        corner(img,6); stroke(img,COLORS.lineLight,1,.2)
+        local t = label(f,"TextLabel",{Position=UDim2.new(0,size+16,0,RS.f(10)),Size=UDim2.new(1,-(size+24),0,RS.f(20)),
+            Text=title,TextSize=RS.f(13),Font=FONTS.bold,TextColor3=COLORS.text,TextXAlignment=Enum.TextXAlignment.Left,
+            TextTruncate=Enum.TextTruncate.AtEnd,Category="Labels"})
+        local sub = label(f,"TextLabel",{Position=UDim2.new(0,size+16,0,RS.f(34)),Size=UDim2.new(1,-(size+24),0,RS.f(18)),
+            Text=subtitle,TextSize=RS.f(10),Font=Enum.Font.Code,TextColor3=COLORS.muted,TextXAlignment=Enum.TextXAlignment.Left,
+            TextTruncate=Enum.TextTruncate.AtEnd,Category="Labels"})
+        return {frame=f, img=img, title=t, sub=sub}
+    end
+
+    -- one "key  value" row; copyable rows copy their value on click. Returns the value label (so it can be updated later)
+    local function row(key, value, copyable)
+        local f = Instance.new("Frame", page)
+        f.Size = UDim2.new(1,0,0,RS.f(24)); f.BackgroundColor3 = Color3.fromRGB(8,8,10); f.BackgroundTransparency = .1
+        f.BorderSizePixel = 0; f.LayoutOrder = nextOrder(); corner(f,3)
+        label(f,"TextLabel",{Position=UDim2.fromOffset(8,0),Size=UDim2.new(.36,0,1,0),Text=key,TextSize=RS.f(10),
+            Font=FONTS.default,TextColor3=COLORS.text,TextXAlignment=Enum.TextXAlignment.Left,
+            TextTruncate=Enum.TextTruncate.AtEnd,Category="Labels"})
+        local v = label(f,"TextButton",{AnchorPoint=Vector2.new(1,0),Position=UDim2.new(1,-8,0,0),Size=UDim2.new(.62,-8,1,0),
+            Text=tostring(value),TextSize=RS.f(10),Font=Enum.Font.Code,TextColor3=COLORS.accent,
+            TextXAlignment=Enum.TextXAlignment.Right,TextTruncate=Enum.TextTruncate.AtEnd,AutoButtonColor=false,Category="Labels"})
+        table.insert(Acc.texts, v)
+        if copyable then
+            bindCursorHover(v)
+            addTT(v, "Click to copy")
+            v.MouseButton1Click:Connect(function()
+                playsfx("click")
+                local copy = (typeof(setclipboard) == "function" and setclipboard) or (typeof(toclipboard) == "function" and toclipboard)
+                if copy then
+                    pcall(copy, v.Text)
+                    AddLog("Copied: "..v.Text, COLORS.accent)
+                else
+                    AddLog("Clipboard is not available here", COLORS.pink)
+                end
+            end)
+        end
+        regSearch(key, "Info", f)
+        return v
+    end
+
+    -- ---------- Player ----------
+    regSearch("Player", "Info", header("Player"))
+    if lp then
+        local uid = lp.UserId
+        card("rbxthumb://type=AvatarHeadShot&id="..tostring(uid).."&w=150&h=150", lp.DisplayName, "@"..lp.Name)
+        row("Display Name", lp.DisplayName, true)
+        row("Username", lp.Name, true)
+        row("User ID", uid, true)
+        local days = lp.AccountAge   -- whole days since the account was created
+        row("Account Created", os.date("!%d %B %Y", os.time() - days * 86400))
+        row("Account Age", string.format("%d days (%.1f years)", days, days / 365.25))
+    else
+        row("Player", "not found")
+    end
+
+    -- ---------- Game ----------
+    regSearch("Game", "Info", header("Game"))
+    local gameCard = card("rbxthumb://type=GameIcon&id="..tostring(game.GameId).."&w=150&h=150", game.Name, "loading...")
+    local nameValue = row("Name", game.Name, true)
+    row("Place ID", game.PlaceId, true)
+    row("Universe ID", game.GameId, true)
+    row("Server (Job) ID", game.JobId ~= "" and game.JobId or "none (Studio)", true)
+
+    -- ---------- Device (detected automatically, refreshed when the screen changes) ----------
+    regSearch("Device", "Info", header("Device"))
+    local devValue = row("Device", "-")
+    local inputValue = row("Input", "-")
+    local screenValue = row("Screen (px)", "-")
+    local scaleValue = row("Menu Scale", "-")
+    Nav.refreshDevice = function()
+        local d = Nav.device
+        local sz = screenGui.AbsoluteSize
+        devValue.Text = d and d.kind or "?"
+        inputValue.Text = d and d.input or "?"
+        screenValue.Text = string.format("%d x %d", sz.X, sz.Y)
+        scaleValue.Text = string.format("x%.2f", uiScale.Scale)
+    end
+    Nav.refreshDevice()
+    screenGui:GetPropertyChangedSignal("AbsoluteSize"):Connect(function() task.delay(0.2, Nav.refreshDevice) end)
+
+    -- the real place name and creator come from MarketplaceService (it yields, so it runs in its own thread)
+    task.spawn(function()
+        local ok, info = pcall(function() return MarketplaceService:GetProductInfo(game.PlaceId) end)
+        if not ok or type(info) ~= "table" then
+            gameCard.sub.Text = "info unavailable (unpublished place?)"
+            return
+        end
+        if info.Name then gameCard.title.Text = info.Name; nameValue.Text = info.Name end
+        gameCard.sub.Text = info.Creator and ("by "..tostring(info.Creator.Name)) or ""
+        -- fallback: if the thumbnail has not loaded after a few seconds, try the place icon asset instead
+        task.delay(3, function()
+            if gameCard.img.Parent and not gameCard.img.IsLoaded and info.IconImageAssetId and info.IconImageAssetId ~= 0 then
+                gameCard.img.Image = "rbxassetid://"..tostring(info.IconImageAssetId)
+            end
+        end)
+    end)
+end)()
 
 -- ===================== STARTUP =====================
 spawn(function()
