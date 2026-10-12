@@ -138,6 +138,8 @@ local settingsPage  = nil
 local RS = { scale = (UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled) and 1.4 or 1.1, pane = nil }   -- touch devices: taller rows
 Nav.leftW = 360   -- left pane width (General / your tabs); right pane = window width - 134 - leftW
 Nav.fitToScreen = true   -- true: the menu never grows past the screen edges; false: the biggest sizes may exceed the screen
+Nav.allowOffscreen = true   -- true: the menu may be dragged partly outside the screen (Settings > Window > Allow Off-Screen Drag)
+Nav.offscreenMargin = 40    -- how much of the menu (in menu units, scaled with it) always stays on screen so it can be grabbed back
 function RS.n(v)   -- scales the number only while a right-pane page is being built
     if RS.pane and settingsPage and settingsPage:IsDescendantOf(RS.pane) then return math.floor(v * RS.scale + 0.5) end
     return v
@@ -2324,11 +2326,21 @@ table.insert(scriptConnections,RunService.RenderStepped:Connect(function()
     local screenSize = screenGui.AbsoluteSize
     local winSize = window.AbsoluteSize
     local want = drag.win0 + (drag.point() - drag.mouse0)
-    -- keep the window on screen (especially at the top, so the top bar never leaves the visible area),
-    -- but never snap it if it started partly off-screen
+    -- where the window may go. Normally it must stay fully on screen. With Nav.allowOffscreen it may be pushed partly outside
+    -- the screen (left / right / bottom), but a strip of Nav.offscreenMargin always stays visible and the top bar never goes
+    -- above the top edge, so the window can always be grabbed back. It is never snapped if it started outside the range.
+    local minX, maxX, minY, maxY
+    if Nav.allowOffscreen then
+        local keep = (Nav.offscreenMargin or 40) * uiScale.Scale
+        minX, maxX = keep - winSize.X, screenSize.X - keep
+        minY, maxY = 0, screenSize.Y - keep - Nav.guiInset()
+    else
+        minX, maxX = 0, math.max(0, screenSize.X - winSize.X)
+        minY, maxY = 0, math.max(0, screenSize.Y - winSize.Y - Nav.guiInset())
+    end
     want = Vector2.new(
-        math.clamp(want.X, math.min(0, drag.win0.X), math.max(0, screenSize.X - winSize.X, drag.win0.X)),
-        math.clamp(want.Y, math.min(0, drag.win0.Y), math.max(0, screenSize.Y - winSize.Y - Nav.guiInset(), drag.win0.Y)))
+        math.clamp(want.X, math.min(minX, drag.win0.X), math.max(maxX, drag.win0.X)),
+        math.clamp(want.Y, math.min(minY, drag.win0.Y), math.max(maxY, drag.win0.Y)))
     local nowAbs = window.AbsolutePosition
     -- learn how many absolute pixels the window really moves per 1 unit of Position offset
     -- (exactly 1 normally; measured here so the drag stays correct even if the UI scale also scales the offset)
@@ -2658,8 +2670,16 @@ Nav.keepOnScreen = function()
     if not screenGui or not screenGui.Parent or not window.Visible or isMaxed or isCollapsed then return end
     local screenSize = screenGui.AbsoluteSize
     local pos, size = window.AbsolutePosition, window.AbsoluteSize
-    local x = math.clamp(pos.X, 0, math.max(0, screenSize.X - size.X))
-    local y = math.clamp(pos.Y, 0, math.max(0, screenSize.Y - size.Y - Nav.guiInset()))
+    local x, y
+    if Nav.allowOffscreen then
+        -- off-screen dragging is allowed: only make sure a strip of the menu (and its top bar) is still reachable
+        local keep = (Nav.offscreenMargin or 40) * uiScale.Scale
+        x = math.clamp(pos.X, keep - size.X, math.max(keep - size.X, screenSize.X - keep))
+        y = math.clamp(pos.Y, 0, math.max(0, screenSize.Y - keep - Nav.guiInset()))
+    else
+        x = math.clamp(pos.X, 0, math.max(0, screenSize.X - size.X))
+        y = math.clamp(pos.Y, 0, math.max(0, screenSize.Y - size.Y - Nav.guiInset()))
+    end
     if math.abs(x - pos.X) < 1 and math.abs(y - pos.Y) < 1 then return end
     local p = window.Position
     TweenService:Create(window, TweenInfo.new(.25, Enum.EasingStyle.Quint, Enum.EasingDirection.Out),
