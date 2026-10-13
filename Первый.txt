@@ -1248,9 +1248,10 @@ tt.str = Instance.new("UIStroke", tt.frame)
 tt.str.Color = COLORS.accent; tt.str.Thickness = 1; tt.str.Transparency = .35
 table.insert(Acc.strokes, tt.str)
 tt.lbl = Instance.new("TextLabel", tt.frame)
-tt.lbl.Size = UDim2.new(1,-8,1,0); tt.lbl.Position = UDim2.fromOffset(4,0)
-tt.lbl.BackgroundTransparency = 1; tt.lbl.TextSize = 10; tt.lbl.Font = Enum.Font.Code
+tt.lbl.Size = UDim2.new(1,-16,1,0); tt.lbl.Position = UDim2.fromOffset(8,0)
+tt.lbl.BackgroundTransparency = 1; tt.lbl.TextSize = 11; tt.lbl.Font = Enum.Font.Code
 tt.lbl.TextColor3 = COLORS.text; tt.lbl.TextXAlignment = Enum.TextXAlignment.Center
+tt.lbl.TextWrapped = true
 tt.lbl.ZIndex = 8889
 
 tt.delay = nil
@@ -1258,6 +1259,8 @@ local function hideTT()
     if tt.delay then task.cancel(tt.delay); tt.delay = nil end
     tt.frame.Visible = false
 end
+-- Shows a hint after the mouse rests on inst for a moment. The hint wraps onto several lines when it is long,
+-- grows with the menu (UI scale) and is kept inside the screen.
 local function addTT(inst, txt)
     if not inst or not txt or txt == "" then return end
     inst.MouseEnter:Connect(function()
@@ -1265,10 +1268,19 @@ local function addTT(inst, txt)
         tt.delay = task.delay(0.6, function()
             local ok,mp = pcall(function() return UserInputService:GetMouseLocation() end)
             if not ok or not inst.Parent then return end
-            tt.lbl.Text = txt
-            local w = math.clamp(#txt * 6 + 20, 60, 200)
-            tt.frame.Size = UDim2.fromOffset(w, 22)
-            tt.frame.Position = UDim2.fromOffset(mp.X - w/2, mp.Y - 34)
+            local sc = math.max(uiScale.Scale, 0.5)
+            local textSize = math.clamp(math.floor(11 * sc + 0.5), 10, 40)
+            local screen = screenGui.AbsoluteSize
+            local maxW = math.clamp(260 * sc, 160, math.max(160, screen.X * 0.45))
+            local bounds = game:GetService("TextService"):GetTextSize(txt, textSize, tt.lbl.Font, Vector2.new(maxW - 16, 1000))
+            local w = math.min(maxW, bounds.X + 18)
+            local h = bounds.Y + math.floor(10 * sc)
+            tt.lbl.Text = txt; tt.lbl.TextSize = textSize
+            tt.frame.Size = UDim2.fromOffset(w, h)
+            local x = math.clamp(mp.X - w/2, 4, math.max(4, screen.X - w - 4))
+            local y = mp.Y - h - 16
+            if y < 4 then y = mp.Y + 24 end   -- no room above the cursor: show the hint below it
+            tt.frame.Position = UDim2.fromOffset(x, y)
             tt.frame.Visible = true
             tt.delay = nil
         end)
