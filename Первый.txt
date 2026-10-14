@@ -1248,10 +1248,9 @@ tt.str = Instance.new("UIStroke", tt.frame)
 tt.str.Color = COLORS.accent; tt.str.Thickness = 1; tt.str.Transparency = .35
 table.insert(Acc.strokes, tt.str)
 tt.lbl = Instance.new("TextLabel", tt.frame)
-tt.lbl.Size = UDim2.new(1,-16,1,0); tt.lbl.Position = UDim2.fromOffset(8,0)
-tt.lbl.BackgroundTransparency = 1; tt.lbl.TextSize = 11; tt.lbl.Font = Enum.Font.Code
+tt.lbl.Size = UDim2.new(1,-8,1,0); tt.lbl.Position = UDim2.fromOffset(4,0)
+tt.lbl.BackgroundTransparency = 1; tt.lbl.TextSize = 10; tt.lbl.Font = Enum.Font.Code
 tt.lbl.TextColor3 = COLORS.text; tt.lbl.TextXAlignment = Enum.TextXAlignment.Center
-tt.lbl.TextWrapped = true
 tt.lbl.ZIndex = 8889
 
 tt.delay = nil
@@ -1259,8 +1258,6 @@ local function hideTT()
     if tt.delay then task.cancel(tt.delay); tt.delay = nil end
     tt.frame.Visible = false
 end
--- Shows a hint after the mouse rests on inst for a moment. The hint wraps onto several lines when it is long,
--- grows with the menu (UI scale) and is kept inside the screen.
 local function addTT(inst, txt)
     if not inst or not txt or txt == "" then return end
     inst.MouseEnter:Connect(function()
@@ -1268,19 +1265,10 @@ local function addTT(inst, txt)
         tt.delay = task.delay(0.6, function()
             local ok,mp = pcall(function() return UserInputService:GetMouseLocation() end)
             if not ok or not inst.Parent then return end
-            local sc = math.max(uiScale.Scale, 0.5)
-            local textSize = math.clamp(math.floor(11 * sc + 0.5), 10, 40)
-            local screen = screenGui.AbsoluteSize
-            local maxW = math.clamp(260 * sc, 160, math.max(160, screen.X * 0.45))
-            local bounds = game:GetService("TextService"):GetTextSize(txt, textSize, tt.lbl.Font, Vector2.new(maxW - 16, 1000))
-            local w = math.min(maxW, bounds.X + 18)
-            local h = bounds.Y + math.floor(10 * sc)
-            tt.lbl.Text = txt; tt.lbl.TextSize = textSize
-            tt.frame.Size = UDim2.fromOffset(w, h)
-            local x = math.clamp(mp.X - w/2, 4, math.max(4, screen.X - w - 4))
-            local y = mp.Y - h - 16
-            if y < 4 then y = mp.Y + 24 end   -- no room above the cursor: show the hint below it
-            tt.frame.Position = UDim2.fromOffset(x, y)
+            tt.lbl.Text = txt
+            local w = math.clamp(#txt * 6 + 20, 60, 200)
+            tt.frame.Size = UDim2.fromOffset(w, 22)
+            tt.frame.Position = UDim2.fromOffset(mp.X - w/2, mp.Y - 34)
             tt.frame.Visible = true
             tt.delay = nil
         end)
@@ -1397,31 +1385,19 @@ local function addButton(txt,cb)
     end))
 end
 
-local function addSlider(txt,val,fillScale,cb,minV,maxV)
+local function addSlider(txt,val,fillScale,cb)
     local row=makeRow(23)
     if curSection then regSearch(txt,curSection.name,row) end
     local sH,sY=RS.n(SIZES.sliderH),RS.n(3)
     local track=Instance.new("Frame",row); track.Position=UDim2.fromOffset(0,sY); track.Size=UDim2.new(1,-2,0,sH); track.BackgroundColor3=Color3.fromRGB(10,10,11); track.BorderSizePixel=0; track.Active=true; stroke(track,Color3.fromRGB(28,28,30),1,.15); bindCursorHover(track)
     local fill=Instance.new("Frame",row); fill.Position=UDim2.fromOffset(0,sY); fill.Size=UDim2.new(fillScale or .5,0,0,sH); fill.BackgroundColor3=COLORS.accent; fill.BorderSizePixel=0; fill.Active=true; Track.Grad(gradient(fill,COLORS.accentDk,COLORS.accent,0)); bubble(fill,20,false,nil,nil,true)
     rowLabel(row,txt, "Sliders")
-    -- the slider's value is either Min..Max (sliders made with the API, which pass minV / maxV) or 0..maxN (built-in sliders)
+    local vt=label(row,"TextLabel",{AnchorPoint=Vector2.new(1,0),Position=UDim2.new(1,-5,0,0), Size=UDim2.fromOffset(RS.n(72),RS.n(23)),Text=tostring(val or 50),TextSize=RS.n(TSIZES.value),TextXAlignment=Enum.TextXAlignment.Right, Category="Sliders"})
     local maxN=(tonumber(tostring(val)) or 100)/(fillScale or .5)
-    local ranged = minV ~= nil and maxV ~= nil and maxV > minV
-    local function valueOf(a) if ranged then return minV + (maxV - minV) * a end return maxN * a end
-    local function fmt(v)   -- whole numbers for big ranges, 2 decimals for small ones
-        local span = ranged and (maxV - minV) or maxN
-        if span > 20 or span ~= span then return tostring(math.floor(v + .5)) end
-        return tostring(math.floor(v * 100 + .5) / 100)
-    end
-    -- the number can be typed in by hand whenever it is a real, finite number (a text box sits on top of the track, so
-    -- clicking the number edits it instead of moving the slider)
-    local editable = ranged or (maxN == maxN and maxN > 0 and maxN < math.huge)
-    local vt=label(row,editable and "TextBox" or "TextLabel",{AnchorPoint=Vector2.new(1,0),Position=UDim2.new(1,-5,0,0), Size=UDim2.fromOffset(RS.n(72),RS.n(23)),Text=tostring(val or 50),TextSize=RS.n(TSIZES.value),TextXAlignment=Enum.TextXAlignment.Right, Category="Sliders", ClearTextOnFocus=false})
     local function setA(a)
         a=math.clamp(a,0,1); fill.Size=UDim2.new(a,0,0,sH)
-        local v = valueOf(a)
-        vt.Text=fmt(v); menuState.sliders[txt]=a
-        if cb then cb(a, v) end   -- a = 0..1 fraction (as always), v = the real value between Min and Max
+        vt.Text=tostring(math.floor(maxN*a+.5)); menuState.sliders[txt]=a
+        if cb then cb(a) end
     end
     local function fromX(x) setA((x-track.AbsolutePosition.X)/track.AbsoluteSize.X) end
     sliderSet[txt]=setA; menuState.sliders[txt]=fillScale or .5
@@ -1446,31 +1422,6 @@ local function addSlider(txt,val,fillScale,cb,minV,maxV)
             end
         end
     end)
-
-    -- type a value: click the number, enter it and press Enter (or click away). Escape or text that is not a number cancels.
-    -- A value outside the slider's range is clamped to it.
-    if editable then
-        local before
-        vt.FocusGained:Connect(function()
-            before = menuState.sliders[txt] or (fillScale or .5)
-            vt.SelectionStart = 1; vt.CursorPosition = #vt.Text + 1   -- select the whole number, so typing replaces it
-        end)
-        vt.FocusLost:Connect(function(enterPressed, input)
-            local n = tonumber(vt.Text)
-            local cancelled = input and input.KeyCode == Enum.KeyCode.Escape
-            if n and not cancelled then
-                setA(ranged and (n - minV) / (maxV - minV) or n / maxN)   -- clamps to the range and rewrites the number
-                playsfx("slider")
-                if addHistoryEntry then
-                    local snapVal = before
-                    addHistoryEntry("⟷ "..txt.." → "..vt.Text, COLORS.muted, function() setA(snapVal) end)
-                end
-            else
-                vt.Text = fmt(valueOf(menuState.sliders[txt] or 0))   -- put the old number back
-            end
-        end)
-        addTT(vt, "Click the number, type a value and press Enter")
-    end
 end
 
 local function addInput(txt,def,cb)
@@ -3189,13 +3140,11 @@ local function makeSideTabAPI(page, sideName)
 
     function api:AddSlider(opts)
         -- opts: { Text, Min, Max, Default, Callback }
-        -- Callback(a, value): a = fill fraction 0..1 (as always), value = the real number between Min and Max.
-        -- The number on the slider can be clicked and typed in by hand.
         local min  = opts.Min     or 0
         local max  = opts.Max     or 100
         local def  = opts.Default or min
         local scale = (max - min) > 0 and (def - min) / (max - min) or 0
-        withPage(function() addSlider(opts.Text or "Slider", def, scale, opts.Callback, min, max) end)
+        withPage(function() addSlider(opts.Text or "Slider", def, scale, opts.Callback) end)
         return self
     end
 
