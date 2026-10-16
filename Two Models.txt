@@ -1,0 +1,2074 @@
+-- ===================== DYSER LOADER (second module) =====================
+-- Loads the menu from a link and adds the right-hand tabs and all the extras to it.
+-- The library itself (the first module) is hosted on GitHub. The third module loads THIS file and builds the left tabs.
+--   * (the left tabs Main / Misc are in the third module, which loads this one)
+--   * Info        = the right-hand Info tab (player, game and device information)
+--   * Settings    = the right-hand Settings tab (hotkey, menu size, off-screen drag, rejoin, stats window, HINTS on/off, sound)
+--   * History     = the right-hand History tab (every action the menu records, with revert buttons)
+--   * Cursor      = the right-hand Cursor tab (settings of the custom cursor)
+--   * Search      = the search box under the right-hand tabs (the first module has no search): finds any function,
+--                   section or tab, also one you moved to another tab, and opens it
+--   * Smooth sections = the ^ arrow of a section folds / opens its functions with an animation; the same for the arrows
+--                   next to General / Preview (whole panels) and for dropdown arrows
+--   Both are built here so that the first module stays small
+--   * Draggable tabs / movable functions / hints = at the very end: drag tabs along their bar, hold Left Shift and drag a
+--     function to move it, and rest the mouse on a tab or function to see what it does
+
+-- The first module (the library) is loaded from GitHub. The file name in the link is URL-encoded: "First%20Models.txt"
+-- is the file "First Models.txt".
+local BASE = "https://raw.githubusercontent.com/Haralampos2009/DyserLib-Roblox/refs/heads/main/"
+local VERSIONS = {
+    { name = "First Models", url = BASE .. "First%20Models.txt" },
+}
+
+-- ── 1. Load the library ────────────────────────────────────────────────
+-- Every step is checked on its own, so the message tells you exactly what went wrong
+-- (a plain loadstring(game:HttpGet(URL))() would hide the real reason behind "attempt to call a nil value").
+if type(loadstring) ~= "function" then
+    warn("[Dyser] loadstring is not available here. Run this script in an executor, or enable LoadStringEnabled.")
+    return
+end
+
+local source, Dyser
+for _, version in ipairs(VERSIONS) do
+    local okGet, body = pcall(function() return game:HttpGet(version.url) end)
+    if not okGet then
+        warn("[Dyser] Download of the " .. version.name .. " first module failed (link or connection): " .. tostring(body))
+    elseif type(body) ~= "string" or #body < 2000 then
+        warn("[Dyser] The link of the " .. version.name .. " first module did not return it. It returned: " .. tostring(body):sub(1, 150))
+    else
+        local chunk, compileError = loadstring(body)
+        if not chunk then
+            warn("[Dyser] The " .. version.name .. " first module has an error and cannot start: " .. tostring(compileError))
+        else
+            local ok, library = pcall(chunk)
+            if ok and type(library) == "table" then
+                source, Dyser = body, library
+                print("[Dyser] First module loaded (" .. version.name .. ", " .. #body .. " bytes).")
+                break
+            end
+            warn("[Dyser] The " .. version.name .. " first module crashed while starting: " .. tostring(library))
+        end
+    end
+end
+if not Dyser then return end
+
+local Window = Dyser:GetWindow()
+
+-- ── 2. Left tabs ───────────────────────────────────────────────────────
+-- The tabs with your own functions (Main, Misc, ...) are not here: they live in the THIRD module, which loads this one and
+-- builds them on top of it (see what this file returns at the very end).
+
+-- ── 3. Right-hand tabs: Info, Settings, History, Cursor ────────────────
+-- The first module only provides the building blocks (Window:AddRightTab, the Dyser.UI toolkit, the history log, the sound / hotkey API).
+if not Window.AddRightTab or not Dyser.UI then
+    warn("[Dyser] The first module on GitHub is outdated (no AddRightTab): upload the new first module to GitHub. Info, Settings, History and Cursor tabs skipped.")
+    return
+end
+
+local UI = Dyser.UI
+local label, corner, stroke = UI.label, UI.corner, UI.stroke
+local bindCursorHover, addTT, playsfx = UI.bindCursorHover, UI.addTT, UI.playsfx
+local Acc, COLORS, FONTS, RS, Nav = UI.Acc, UI.COLORS, UI.FONTS, UI.RS, UI.Nav
+local screenGui, uiScale = UI.screenGui, UI.uiScale
+local Track, gradient = UI.Track, UI.gradient
+local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
+local function AddLog(text, color) Dyser:AddLog(text, color) end
+
+-- Runs one part of the setup. If it fails, the error is printed with the name of the part and the other parts still run.
+local function safe(name, fn)
+    local ok, err = pcall(fn)
+    if not ok then warn("[Dyser] " .. name .. " failed: " .. tostring(err)) end
+end
+
+-- ── Hint system ────────────────────────────────────────────────────────
+-- A small box that appears when the mouse rests on a tab or function for a moment. It is built here (instead of using
+-- the library's addTT) so that Settings > Hints > Show Hints can switch every hint of this module on and off.
+-- Nav.hintsEnabled = the switch; Nav.hideHint() = hide the box at once.
+Nav.hintsEnabled = true
+safe("Hint system", function()
+    local RunService = game:GetService("RunService")
+    local box = Instance.new("TextLabel")
+    box.Name = "DyserHint"; box.Visible = false; box.Active = false; box.ZIndex = 10000
+    box.AutomaticSize = Enum.AutomaticSize.XY; box.Size = UDim2.fromOffset(0, 0)
+    box.BackgroundColor3 = Color3.fromRGB(12, 12, 13); box.BackgroundTransparency = 0.05; box.BorderSizePixel = 0
+    box.TextColor3 = COLORS.text; box.Font = FONTS.default; box.TextSize = 12; box.Text = ""
+    box.TextWrapped = true; box.TextXAlignment = Enum.TextXAlignment.Left; box.TextYAlignment = Enum.TextYAlignment.Center
+    corner(box, 4); Track.Stroke(stroke(box, COLORS.accent, 1, 0.2))
+    local padding = Instance.new("UIPadding", box)
+    padding.PaddingLeft = UDim.new(0, 8); padding.PaddingRight = UDim.new(0, 8)
+    padding.PaddingTop = UDim.new(0, 5); padding.PaddingBottom = UDim.new(0, 5)
+    local limit = Instance.new("UISizeConstraint", box); limit.MaxSize = Vector2.new(300, 1000)   -- longer hints wrap
+    box.Parent = screenGui
+
+    local current, token = nil, 0   -- the element the mouse is on now; a counter that cancels a pending show
+    local function hide() token += 1; current = nil; box.Visible = false end
+    Nav.hideHint = hide
+
+    -- keeps the box next to the mouse and inside the screen
+    local function place()
+        local mp, size, screen = UserInputService:GetMouseLocation(), box.AbsoluteSize, screenGui.AbsoluteSize
+        local x = math.min(mp.X + 16, screen.X - size.X - 4)
+        local y = mp.Y + 20
+        if y + size.Y > screen.Y - 4 then y = mp.Y - size.Y - 12 end   -- no room below: show it above the mouse
+        box.Position = UDim2.fromOffset(math.max(4, x), math.max(4, y))
+    end
+    RunService.RenderStepped:Connect(function()
+        if not box.Visible then return end
+        local win = screenGui:FindFirstChild("MenuWindow")
+        if not Nav.hintsEnabled or not win or not win.Visible then hide(); return end
+        place()
+    end)
+
+    -- replaces the library's addTT for everything in this module
+    addTT = function(inst, text)
+        inst.MouseEnter:Connect(function()
+            if not Nav.hintsEnabled then return end
+            token += 1
+            local mine = token
+            current = inst
+            task.delay(0.4, function()   -- the mouse has to rest for a moment first
+                if mine ~= token or current ~= inst or not Nav.hintsEnabled then return end
+                local win = screenGui:FindFirstChild("MenuWindow")
+                if not win or not win.Visible then return end
+                box.Text = text
+                box.TextSize = math.clamp(math.floor(12 * uiScale.Scale + 0.5), 11, 26)
+                box.Visible = true
+                place()
+            end)
+        end)
+        inst.MouseLeave:Connect(function() if current == inst then hide() end end)
+    end
+end)
+
+-- ── Info tab (player + game + device information) ──────────────────────
+-- Player: avatar headshot, display name, username, user ID, account creation date and age.
+-- Game: icon, name, place ID, universe ID, server (job) ID.
+-- Click any ID / name value to copy it (needs setclipboard from your executor). Wrapped in a function to save locals.
+safe("Info tab", function()
+    local Info = Window:AddRightTab("Info", { Order = 10, Select = true })   -- Order 10 = first in the tab bar; Select = opens first
+    local page = Info:GetPage()
+    local Players = game:GetService("Players")
+    local MarketplaceService = game:GetService("MarketplaceService")
+    local lp = Players.LocalPlayer
+    local order = 0
+    local function nextOrder() order = order + 1; return order end
+
+    -- section header
+    local function header(text)
+        local f = Instance.new("Frame", page)
+        f.Size = UDim2.new(1,0,0,RS.f(22)); f.BackgroundColor3 = Color3.fromRGB(10,10,13)
+        f.BorderSizePixel = 0; f.LayoutOrder = nextOrder(); corner(f,3)
+        local l = label(f,"TextLabel",{Size=UDim2.new(1,-8,1,0),Position=UDim2.fromOffset(6,0),Text=text,
+            TextSize=RS.f(11),Font=FONTS.bold,TextColor3=COLORS.accent,TextXAlignment=Enum.TextXAlignment.Left,Category="Labels"})
+        table.insert(Acc.texts, l)
+        return f
+    end
+
+    -- big card: picture on the left, title + subtitle on the right
+    local function card(imageUrl, title, subtitle)
+        local f = Instance.new("Frame", page)
+        f.Size = UDim2.new(1,0,0,RS.f(72)); f.BackgroundColor3 = Color3.fromRGB(8,8,10); f.BackgroundTransparency = .1
+        f.BorderSizePixel = 0; f.LayoutOrder = nextOrder(); corner(f,4)
+        local size = RS.f(56)
+        local img = Instance.new("ImageLabel", f)
+        img.AnchorPoint = Vector2.new(0,.5); img.Position = UDim2.new(0,8,.5,0); img.Size = UDim2.fromOffset(size,size)
+        img.BackgroundColor3 = Color3.fromRGB(16,16,18); img.BorderSizePixel = 0
+        img.ScaleType = Enum.ScaleType.Crop; img.Image = imageUrl or ""
+        corner(img,6); stroke(img,COLORS.lineLight,1,.2)
+        local t = label(f,"TextLabel",{Position=UDim2.new(0,size+16,0,RS.f(10)),Size=UDim2.new(1,-(size+24),0,RS.f(20)),
+            Text=title,TextSize=RS.f(13),Font=FONTS.bold,TextColor3=COLORS.text,TextXAlignment=Enum.TextXAlignment.Left,
+            TextTruncate=Enum.TextTruncate.AtEnd,Category="Labels"})
+        local sub = label(f,"TextLabel",{Position=UDim2.new(0,size+16,0,RS.f(34)),Size=UDim2.new(1,-(size+24),0,RS.f(18)),
+            Text=subtitle,TextSize=RS.f(10),Font=Enum.Font.Code,TextColor3=COLORS.muted,TextXAlignment=Enum.TextXAlignment.Left,
+            TextTruncate=Enum.TextTruncate.AtEnd,Category="Labels"})
+        return {frame=f, img=img, title=t, sub=sub}
+    end
+
+    -- one "key  value" row; copyable rows copy their value on click. Returns the value label (so it can be updated later)
+    local function row(key, value, copyable)
+        local f = Instance.new("Frame", page)
+        f.Size = UDim2.new(1,0,0,RS.f(24)); f.BackgroundColor3 = Color3.fromRGB(8,8,10); f.BackgroundTransparency = .1
+        f.BorderSizePixel = 0; f.LayoutOrder = nextOrder(); corner(f,3)
+        label(f,"TextLabel",{Position=UDim2.fromOffset(8,0),Size=UDim2.new(.36,0,1,0),Text=key,TextSize=RS.f(10),
+            Font=FONTS.default,TextColor3=COLORS.text,TextXAlignment=Enum.TextXAlignment.Left,
+            TextTruncate=Enum.TextTruncate.AtEnd,Category="Labels"})
+        local v = label(f,"TextButton",{AnchorPoint=Vector2.new(1,0),Position=UDim2.new(1,-8,0,0),Size=UDim2.new(.62,-8,1,0),
+            Text=tostring(value),TextSize=RS.f(10),Font=Enum.Font.Code,TextColor3=COLORS.accent,
+            TextXAlignment=Enum.TextXAlignment.Right,TextTruncate=Enum.TextTruncate.AtEnd,AutoButtonColor=false,Category="Labels"})
+        table.insert(Acc.texts, v)
+        if copyable then
+            bindCursorHover(v)
+            addTT(v, "Click to copy")
+            v.MouseButton1Click:Connect(function()
+                playsfx("click")
+                local copy = (typeof(setclipboard) == "function" and setclipboard) or (typeof(toclipboard) == "function" and toclipboard)
+                if copy then
+                    pcall(copy, v.Text)
+                    AddLog("Copied: "..v.Text, COLORS.accent)
+                else
+                    AddLog("Clipboard is not available here", COLORS.pink)
+                end
+            end)
+        end
+        return v
+    end
+
+    -- ---------- Player ----------
+    local teamValue
+    header("Player")
+    if lp then
+        local uid = lp.UserId
+        card("rbxthumb://type=AvatarHeadShot&id="..tostring(uid).."&w=150&h=150", lp.DisplayName, "@"..lp.Name)
+        row("Display Name", lp.DisplayName, true)
+        row("Username", lp.Name, true)
+        row("User ID", uid, true)
+        local days = lp.AccountAge   -- whole days since the account was created
+        row("Account Created", os.date("!%d %B %Y", os.time() - days * 86400))
+        row("Account Age", string.format("%d days (%.1f years)", days, days / 365.25))
+        row("Membership", lp.MembershipType == Enum.MembershipType.Premium and "Premium" or "None")
+        row("Language", lp.LocaleId, true)
+        teamValue = row("Team", "-")
+    else
+        row("Player", "not found")
+    end
+
+    -- ---------- Character (updates live) ----------
+    header("Character")
+    local healthValue = row("Health", "-")
+    local speedValue = row("Walk Speed", "-")
+    local jumpValue = row("Jump", "-")
+    local posValue = row("Position", "-", true)
+    local rigValue = row("Rig Type", "-")
+
+    -- ---------- Game ----------
+    header("Game")
+    local gameCard = card("rbxthumb://type=GameIcon&id="..tostring(game.GameId).."&w=150&h=150", game.Name, "loading...")
+    local nameValue = row("Name", game.Name, true)
+    row("Place ID", game.PlaceId, true)
+    row("Universe ID", game.GameId, true)
+    row("Server (Job) ID", game.JobId ~= "" and game.JobId or "none (Studio)", true)
+    local creatorValue = row("Creator", "-")
+    row("Creator ID", game.CreatorId, true)
+    local okType, creatorType = pcall(function() return game.CreatorType.Name end)
+    row("Creator Type", okType and creatorType or "?")
+    row("Place Version", game.PlaceVersion)
+    local createdValue = row("Created", "-")
+    local updatedValue = row("Updated", "-")
+
+    -- ---------- Server (updates live) ----------
+    header("Server")
+    local playersValue = row("Players", "-")
+    local serverAgeValue = row("Server Age", "-")
+    row("Private Server", (game.PrivateServerId ~= "") and "Yes" or "No")
+    local countryValue = row("Your Country", "-")
+
+    -- ---------- Device (detected automatically, refreshed when the screen changes) ----------
+    header("Device")
+    local devValue = row("Device", "-")
+    local inputValue = row("Input", "-")
+    local screenValue = row("Screen (px)", "-")
+    local scaleValue = row("Menu Scale", "-")
+    Nav.refreshDevice = function()
+        local d = Nav.device
+        local sz = screenGui.AbsoluteSize
+        devValue.Text = d and d.kind or "?"
+        inputValue.Text = d and d.input or "?"
+        screenValue.Text = string.format("%d x %d", sz.X, sz.Y)
+        scaleValue.Text = string.format("x%.2f", uiScale.Scale)
+    end
+    Nav.refreshDevice()
+    screenGui:GetPropertyChangedSignal("AbsoluteSize"):Connect(function() task.delay(0.2, Nav.refreshDevice) end)
+
+    -- the real place name and creator come from MarketplaceService (it yields, so it runs in its own thread)
+    task.spawn(function()
+        local ok, info = pcall(function() return MarketplaceService:GetProductInfo(game.PlaceId) end)
+        if not ok or type(info) ~= "table" then
+            gameCard.sub.Text = "info unavailable (unpublished place?)"
+            return
+        end
+        if info.Name then gameCard.title.Text = info.Name; nameValue.Text = info.Name end
+        gameCard.sub.Text = info.Creator and ("by "..tostring(info.Creator.Name)) or ""
+        if info.Creator and info.Creator.Name then creatorValue.Text = tostring(info.Creator.Name) end
+        if info.Created then createdValue.Text = tostring(info.Created):sub(1, 10) end    -- date only: 2024-05-31
+        if info.Updated then updatedValue.Text = tostring(info.Updated):sub(1, 10) end
+        -- fallback: if the thumbnail has not loaded after a few seconds, try the place icon asset instead
+        task.delay(3, function()
+            if gameCard.img.Parent and not gameCard.img.IsLoaded and info.IconImageAssetId and info.IconImageAssetId ~= 0 then
+                gameCard.img.Image = "rbxassetid://"..tostring(info.IconImageAssetId)
+            end
+        end)
+    end)
+
+    -- the country Roblox has on record for you (it yields, so it runs in its own thread)
+    task.spawn(function()
+        local ok, country = pcall(function() return game:GetService("LocalizationService"):GetCountryRegionForPlayerAsync(lp) end)
+        countryValue.Text = (ok and country) and tostring(country) or "unavailable"
+    end)
+
+    -- live values: refreshed twice a second, and only while the Info tab is open
+    local function clock(seconds)
+        seconds = math.max(0, math.floor(seconds))
+        return string.format("%02d:%02d:%02d", math.floor(seconds / 3600), math.floor((seconds % 3600) / 60), seconds % 60)
+    end
+    local function refreshLive()
+        local character = lp and lp.Character
+        local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+        local root = character and character:FindFirstChild("HumanoidRootPart")
+        healthValue.Text = humanoid and string.format("%d / %d", math.floor(humanoid.Health + 0.5), math.floor(humanoid.MaxHealth + 0.5)) or "-"
+        speedValue.Text = humanoid and string.format("%.1f", humanoid.WalkSpeed) or "-"
+        jumpValue.Text = humanoid and (humanoid.UseJumpPower and string.format("%.1f (power)", humanoid.JumpPower)
+            or string.format("%.1f (height)", humanoid.JumpHeight)) or "-"
+        posValue.Text = root and string.format("%.0f, %.0f, %.0f", root.Position.X, root.Position.Y, root.Position.Z) or "-"
+        rigValue.Text = humanoid and humanoid.RigType.Name or "-"
+        if teamValue then teamValue.Text = (lp.Team and lp.Team.Name) or "none" end
+        playersValue.Text = string.format("%d / %d", #Players:GetPlayers(), Players.MaxPlayers)
+        serverAgeValue.Text = clock(workspace.DistributedGameTime)
+    end
+    task.spawn(function()
+        while page.Parent do
+            if page.Visible and screenGui.Enabled then pcall(refreshLive) end
+            task.wait(0.5)
+        end
+    end)
+end)
+
+-- ── Settings tab ───────────────────────────────────────────────────────
+-- Hotkey, menu size, rejoin, stats window and sound controls. The features themselves stay in the library
+-- (Nav.setMenuSize, Nav.rejoin, Nav.setStats, the sound system); this tab only gives you the controls for them.
+safe("Settings tab", function()
+    local Settings = Window:AddRightTab("Settings", { Order = 20 })
+    local page = Settings:GetPage()
+    local HttpService = game:GetService("HttpService")
+    local TeleportService = game:GetService("TeleportService")
+    local Players = game:GetService("Players")
+
+    -- Server Hop: asks Roblox for a list of public servers of this game (up to 300) and joins another one that is not full.
+    -- Nav.hopMode: 1 = random server, 2 = the one with the fewest players, 3 = the one with the most players (not full)
+    Nav.hopMode = 1
+    Nav.serverHop = function()
+        if Nav.hopping then return end
+        Nav.hopping = true
+        task.spawn(function()
+            local function fail(text) AddLog(text, COLORS.pink); Nav.hopping = false end
+            AddLog("Looking for another server...", COLORS.accent)
+            local servers, cursor = {}, nil
+            for _ = 1, 3 do
+                local url = string.format("https://games.roblox.com/v1/games/%d/servers/Public?sortOrder=Asc&limit=100%s",
+                    game.PlaceId, cursor and ("&cursor=" .. cursor) or "")
+                local okGet, body = pcall(function() return game:HttpGet(url) end)
+                if not okGet then return fail("Server Hop failed: " .. tostring(body)) end
+                local okJson, data = pcall(function() return HttpService:JSONDecode(body) end)
+                if not okJson or type(data) ~= "table" then return fail("Server Hop failed: unexpected answer from Roblox") end
+                for _, s in ipairs(data.data or {}) do
+                    if type(s) == "table" and s.id ~= game.JobId and s.playing and s.maxPlayers and s.playing < s.maxPlayers then
+                        table.insert(servers, s)
+                    end
+                end
+                cursor = data.nextPageCursor
+                if not cursor then break end
+            end
+            if #servers == 0 then return fail("No other free server was found") end
+            local pick
+            if Nav.hopMode == 2 then
+                table.sort(servers, function(a, b) return a.playing < b.playing end); pick = servers[1]
+            elseif Nav.hopMode == 3 then
+                table.sort(servers, function(a, b) return a.playing > b.playing end); pick = servers[1]
+            else
+                pick = servers[math.random(#servers)]
+            end
+            AddLog(string.format("Joining a server with %d / %d players...", pick.playing, pick.maxPlayers), COLORS.accent)
+            local okTp, err = pcall(function() TeleportService:TeleportToPlaceInstance(game.PlaceId, pick.id, Players.LocalPlayer) end)
+            if not okTp then return fail("Server Hop failed: " .. tostring(err)) end
+            task.delay(10, function() Nav.hopping = false end)
+        end)
+    end
+
+    -- Move Functions: on = Shift + drag moves functions inside their group and onto other tabs; off = nothing can be moved
+    Nav.movingEnabled = true
+
+    Settings:AddSection("Hotkeys")
+    Settings:AddRebind({ Text = "Open / Close Menu", Default = Dyser:GetToggleKey(), Callback = function(keyCode)
+        Dyser:SetToggleKey(keyCode)
+    end })
+
+    Settings:AddSection("Menu Size")
+    -- click the row to open the list of sizes; the number is a multiplier on top of the automatic screen scale
+    Settings:AddDropdown({ Text = "Size", Default = 2,
+        Options = { "Small (x0.75)", "Auto (x1)", "Large (x1.25)", "Extra Large (x1.5)", "Huge (x1.75)", "Maximum (x2)" },
+        Callback = function(i) Nav.setMenuSize(({ 0.75, 1, 1.25, 1.5, 1.75, 2 })[i]) end })
+
+    Settings:AddSection("Window")
+    -- on: the menu can be dragged partly outside the screen (a strip of it always stays visible so you can grab it back)
+    -- off: the menu always stays fully inside the screen
+    Settings:AddToggle({ Text = "Allow Off-Screen Drag", Default = true, Callback = function(on)
+        Nav.allowOffscreen = on
+        if not on and Nav.keepOnScreen then Nav.keepOnScreen() end   -- pull the menu back in at once
+    end })
+
+    Settings:AddSection("Server")
+    Settings:AddButton({ Text = "Rejoin", Callback = function() Nav.rejoin() end })
+    -- which server "Server Hop" picks among the free public servers of this game
+    Settings:AddDropdown({ Text = "Hop To", Default = 1,
+        Options = { "Random server", "Fewest players", "Most players" },
+        Callback = function(i) Nav.hopMode = i end })
+    Settings:AddButton({ Text = "Server Hop", Callback = function() Nav.serverHop() end })
+
+    Settings:AddSection("Layout")
+    -- on: hold Left Shift and drag a function to move it (inside its group, or onto another tab). off: functions cannot be moved
+    Settings:AddToggle({ Text = "Move Functions", Default = true, Callback = function(on)
+        Nav.movingEnabled = on
+        if not on and Nav.hideMoveCovers then Nav.hideMoveCovers() end
+    end })
+
+    Settings:AddSection("Overlay")
+    -- small window in the top-left corner: FPS, ping, time, session
+    Settings:AddToggle({ Text = "Stats Window", Callback = function(on) Nav.setStats(on) end })
+
+    Settings:AddSection("Hints")
+    -- on: resting the mouse on a tab or function shows what it does. off: no hints are shown anywhere in the menu
+    Settings:AddToggle({ Text = "Show Hints", Default = true, Callback = function(on)
+        Nav.hintsEnabled = on
+        if not on and Nav.hideHint then Nav.hideHint() end   -- hide the one that is on screen right now
+    end })
+
+    Settings:AddSection("Sound Feedback")
+    Settings:AddToggle({ Text = "Sound Enabled", Default = Dyser:GetSoundEnabled(), Callback = function(on)
+        Dyser:SetSoundEnabled(on)
+    end })
+    -- a normal slider: the Callback gets 0..1, which is exactly the volume
+    Settings:AddSlider({ Text = "Volume", Min = 0, Max = 100, Default = 50, Callback = function(a)
+        Dyser:SetSoundVolume(a)
+    end })
+    Dyser:SetSoundVolume(0.5)
+end)
+
+-- ── History tab ────────────────────────────────────────────────────────
+-- Every action the menu records (toggles, sliders, colors, ...) with a revert button. The library keeps the log;
+-- this tab only draws it (Dyser:SetHistorySink replays everything recorded before the tab existed).
+safe("History tab", function()
+    local History = Window:AddRightTab("History", { Order = 30 })
+    local histPage = History:GetPage()
+    local histCount = 0
+
+    local histDateHdr = Instance.new("Frame", histPage)
+    histDateHdr.Size = UDim2.new(1,0,0,RS.f(30)); histDateHdr.BackgroundColor3 = Color3.fromRGB(8,8,10)
+    histDateHdr.BackgroundTransparency = 0; histDateHdr.BorderSizePixel = 0; histDateHdr.LayoutOrder = -999
+    local histDateLbl = label(histDateHdr,"TextLabel",{ Size=UDim2.new(1,-60,1,0), Position=UDim2.fromOffset(8,0), Text="📅  ".. (os.date and os.date("%d %B %Y") or "Session"), TextSize=RS.f(12), Font=FONTS.bold, TextColor3=COLORS.text, TextXAlignment=Enum.TextXAlignment.Left, Category="Labels"})
+    local histClearBtn2 = label(histDateHdr,"TextButton",{ AnchorPoint=Vector2.new(1,.5), Position=UDim2.new(1,-4,.5,0), Size=UDim2.fromOffset(52,20), BackgroundColor3=Color3.fromRGB(18,6,6), Text="Clear", TextSize=10, Font=FONTS.bold, TextColor3=COLORS.pink, AutoButtonColor=false, Category="Buttons"})
+    corner(histClearBtn2,3); stroke(histClearBtn2,Color3.fromRGB(60,15,15),1,.2); bindCursorHover(histClearBtn2)
+    histClearBtn2.MouseButton1Click:Connect(function()
+        playsfx("click")
+        for _,c in ipairs(histPage:GetChildren()) do
+            if c:IsA("Frame") and c~=histDateHdr then c:Destroy() end
+        end
+        histCount=0
+        Dyser:ClearHistory()   -- also forget the log, so a re-opened tab does not bring the entries back
+    end)
+
+    local function drawEntry(entry)   -- draws one recorded action
+        local txt, col, revertFn = entry.text, entry.color, entry.revert
+        if not histPage or not histPage.Parent then return end
+        histCount = histCount + 1
+        local ts = (entry.time ~= "" and entry.time) or ("+"..histCount)
+
+        local row = Instance.new("Frame", histPage)
+        row.Size = UDim2.new(1,0,0,46); row.BackgroundColor3 = Color3.fromRGB(7,7,9)
+        row.BackgroundTransparency = histCount%2==0 and .05 or .12
+        row.BorderSizePixel = 0; row.LayoutOrder = histCount
+
+        local sep = Instance.new("Frame",row)
+        sep.Size=UDim2.new(0,3,1,-4); sep.Position=UDim2.fromOffset(0,2)
+        sep.BackgroundColor3 = col or COLORS.accent; sep.BorderSizePixel=0; corner(sep,2)
+
+        local textW = revertFn and UDim2.new(1,-82,0,22) or UDim2.new(1,-40,0,22)
+
+        local tl = label(row,"TextLabel",{ Position=UDim2.fromOffset(10,3), Size=textW, Text=txt, TextSize=15, Font=Enum.Font.GothamBold, TextColor3=col or COLORS.text, TextXAlignment=Enum.TextXAlignment.Left, TextTruncate=Enum.TextTruncate.AtEnd, Category="Labels"})
+        local tsl = label(row,"TextLabel",{ Position=UDim2.fromOffset(10,26), Size=UDim2.new(1,-82,0,16), Text="⏱  "..ts, TextSize=12, Font=Enum.Font.Code, TextColor3=COLORS.muted, TextXAlignment=Enum.TextXAlignment.Left, Category="Labels"})
+        local numLbl = label(row,"TextLabel",{ AnchorPoint=Vector2.new(1,1), Position=UDim2.new(1,-4,1,-2), Size=UDim2.fromOffset(28,12), Text="#"..histCount, TextSize=9, Font=Enum.Font.Code, TextColor3=Color3.fromRGB(45,45,50), TextXAlignment=Enum.TextXAlignment.Right, Category="Labels"})
+
+        if revertFn then
+            local reverted = false
+            local revertBtn = label(row,"TextButton",{ AnchorPoint=Vector2.new(1,.5), Position=UDim2.new(1,-4,.5,0), Size=UDim2.fromOffset(38,26), BackgroundColor3=Color3.fromRGB(10,18,10), Text="↩ ", TextSize=13, Font=FONTS.bold, TextColor3=Color3.fromRGB(90,220,110), AutoButtonColor=false, Category="Buttons"})
+            corner(revertBtn,4); stroke(revertBtn,Color3.fromRGB(30,60,30),1,.2); bindCursorHover(revertBtn)
+            revertBtn.MouseEnter:Connect(function() if not reverted then TweenService:Create(revertBtn,TweenInfo.new(.12),{BackgroundColor3=Color3.fromRGB(20,50,20)}):Play() end end)
+            revertBtn.MouseLeave:Connect(function() if not reverted then TweenService:Create(revertBtn,TweenInfo.new(.12),{BackgroundColor3=Color3.fromRGB(10,18,10)}):Play() end end)
+            revertBtn.MouseButton1Click:Connect(function()
+                if reverted then return end
+                reverted = true
+                playsfx("click")
+                pcall(revertFn)
+                revertBtn.Text="✓"
+                revertBtn.TextColor3=COLORS.muted
+                TweenService:Create(revertBtn,TweenInfo.new(.2),{BackgroundColor3=Color3.fromRGB(6,10,6)}):Play()
+                stroke(revertBtn,Color3.fromRGB(15,30,15),1,.4)
+                TweenService:Create(sep,TweenInfo.new(.2),{BackgroundColor3=COLORS.muted}):Play()
+                TweenService:Create(tl,TweenInfo.new(.2),{TextColor3=COLORS.muted}):Play()
+                Dyser:AddHistory("↩ Reverted: "..txt, COLORS.muted)   -- logged like any other action
+            end)
+        end
+        task.defer(function() if histPage and histPage.Parent then histPage.CanvasPosition = Vector2.new(0, math.max(0, histPage.AbsoluteCanvasSize.Y - histPage.AbsoluteSize.Y)) end end)
+    end
+
+    Dyser:SetHistorySink(drawEntry)
+end)
+
+-- ── Cursor tab ─────────────────────────────────────────────────────────
+-- Settings of the custom cursor. The cursor itself is drawn by the library; UI.cur is its shared state table.
+safe("Cursor tab", function()
+    local cur = UI.cur
+    local Cursor = Window:AddRightTab("Cursor", { Order = 50 })
+
+    Cursor:AddSection("Cursor")
+    Cursor:AddToggle({ Text = "Enable Cursor", Default = true, Callback = function(v)
+        cur.enabled = v
+        if not v then
+            cur.frame.Visible = false
+            UserInputService.MouseIconEnabled = true
+            cur.inside = false
+        end
+    end })
+    Cursor:AddToggle({ Text = "Spin", Callback = function(v)
+        cur.spinEnabled = v
+        if not v then
+            cur.angle = 0
+            cur.ring.Rotation = 0
+            cur.ch.Rotation  = 0
+            cur.cv.Rotation  = 0
+        end
+    end })
+    -- slider callbacks receive a number from 0 to 1 (see the note above), so each one converts it to its own range
+    Cursor:AddSlider({ Text = "Spin Speed", Min = 0, Max = 360, Default = 120, Callback = function(a) cur.spinSpeed = a * 360 end })
+    Cursor:AddSlider({ Text = "Glow Size", Min = 0, Max = 100, Default = 44, Callback = function(a)
+        local s = math.floor(a * 100 + 0.5)
+        cur.glow.Size = UDim2.fromOffset(s, s)
+    end })
+    Cursor:AddSlider({ Text = "Ring Size", Min = 0, Max = 100, Default = 22, Callback = function(a)
+        local s = math.floor(a * 100 + 0.5)
+        cur.ring.Size = UDim2.fromOffset(s, s)
+    end })
+    Cursor:AddSlider({ Text = "Dot Size", Min = 0, Max = 100, Default = 4, Callback = function(a)
+        local s = math.max(1, math.floor(a * 100 + 0.5))
+        cur.dot.Size = UDim2.fromOffset(s, s)
+    end })
+    Cursor:AddSlider({ Text = "Cross Size", Min = 0, Max = 100, Default = 16, Callback = function(a)
+        local s = math.max(1, math.floor(a * 100 + 0.5))
+        cur.ch.Size = UDim2.fromOffset(s, 2)
+        cur.cv.Size = UDim2.fromOffset(2, s)
+    end })
+    Cursor:AddSlider({ Text = "Glow Alpha", Min = 0, Max = 100, Default = 80, Callback = function(a) cur.glow.BackgroundTransparency = a end })
+    Cursor:AddSlider({ Text = "Ring Alpha", Min = 0, Max = 100, Default = 0, Callback = function(a) cur.stroke.Transparency = a end })
+    Cursor:AddToggle({ Text = "Rainbow", Callback = function(v) cur.rainbow = v end })
+    Cursor:AddSlider({ Text = "Cursor Rainbow Speed", Min = 0, Max = 100, Default = 40, Callback = function(a) cur.rainbowSpeed = a * 2.0 end })
+    Cursor:AddColorPicker({ Text = "Cursor Color", Default = COLORS.accent, Callback = function(c)
+        if cur.rainbow then return end
+        cur.glow.BackgroundColor3 = c
+        cur.dot.BackgroundColor3 = c
+        cur.ch.BackgroundColor3 = c
+        cur.cv.BackgroundColor3 = c
+        cur.stroke.Color = c
+    end })
+end)
+
+-- ── Slider typing (every slider in the menu) ───────────────────────────
+-- Puts an invisible box over the number of each slider. Click the number, type a value, press Enter: the slider moves,
+-- its number changes and its Callback runs, exactly as if you had dragged it (a value outside the range is clamped,
+-- text that is not a number is ignored). It also works for sliders added later: Nav.makeSliderTypable(valueLabel).
+-- The library finds a slider by its NAME, so two sliders in the menu must not share a name (typing then does nothing).
+safe("Slider typing", function()
+    local win = screenGui:FindFirstChild("MenuWindow")
+    if not win then return end
+    local done = setmetatable({}, { __mode = "k" })
+
+    -- how many sliders in the menu have this name
+    local function countNamed(name)
+        local n = 0
+        for _, d in ipairs(win:GetDescendants()) do
+            if d.Name == "Label" and d:IsA("TextLabel") and d.Text == name and d.Parent:FindFirstChild("NumberInput") then n = n + 1 end
+        end
+        return n
+    end
+
+    -- valueLabel = the number label of a library slider row
+    local function attach(valueLabel)
+        local row = valueLabel.Parent
+        if not row or not row:IsA("Frame") or done[row] then return end
+        local nameLabel = row:FindFirstChild("Label")
+        if not (nameLabel and nameLabel:IsA("TextLabel")) then return end
+        local fill
+        for _, c in ipairs(row:GetChildren()) do
+            if c:IsA("Frame") and c:FindFirstChildOfClass("UIGradient") then fill = c; break end
+        end
+        local shown = tonumber(valueLabel.Text)
+        if not fill or not shown then return end   -- not a slider row
+        done[row] = true
+        -- the number shown is (top x fraction): work out "top" from the starting state, as the library does
+        local a0 = fill.Size.X.Scale
+        local top = (a0 > 0.001) and shown / a0 or 100
+
+        local box = Instance.new("TextBox")
+        box.Name = "NumberInput"
+        box.AnchorPoint = valueLabel.AnchorPoint; box.Position = valueLabel.Position; box.Size = valueLabel.Size
+        box.BackgroundTransparency = 1; box.BorderSizePixel = 0; box.BackgroundColor3 = Color3.fromRGB(15, 15, 16)
+        box.Font = valueLabel.Font; box.TextSize = valueLabel.TextSize; box.TextColor3 = valueLabel.TextColor3
+        box.TextXAlignment = Enum.TextXAlignment.Right; box.ClearTextOnFocus = false
+        box.Text = ""; box.PlaceholderText = ""; box.ZIndex = valueLabel.ZIndex + 1
+        local boxPad = Instance.new("UIPadding", box); boxPad.PaddingRight = UDim.new(0, 4)
+        corner(box, 3)
+        local outline = Track.Stroke(stroke(box, COLORS.accent, 1, 1))   -- shown only while you type
+        bindCursorHover(box)
+        valueLabel:GetPropertyChangedSignal("TextSize"):Connect(function() box.TextSize = valueLabel.TextSize end)
+        box.Parent = row
+
+        box.Focused:Connect(function()
+            box.Text = valueLabel.Text; box.TextColor3 = valueLabel.TextColor3
+            box.BackgroundTransparency = 0.1; outline.Transparency = 0.2
+            valueLabel.TextTransparency = 1
+        end)
+        box.FocusLost:Connect(function()
+            local n = tonumber(box.Text)
+            box.Text = ""; box.BackgroundTransparency = 1; outline.Transparency = 1
+            valueLabel.TextTransparency = 0
+            if not n then return end
+            local name = nameLabel.Text
+            if countNamed(name) > 1 then warn("[Dyser] Slider typing: more than one slider is named '" .. name .. "'; rename one."); return end
+            local before = fill.Size.X.Scale
+            Dyser:SetSlider(name, math.clamp(n / top, 0, 1))   -- moves the slider, updates the number, runs the Callback
+            Dyser:AddHistory("⟷ " .. name .. " → " .. valueLabel.Text, COLORS.muted, function() Dyser:SetSlider(name, before) end)
+        end)
+    end
+    Nav.makeSliderTypable = attach
+
+    -- the number of a slider is a right-aligned TextLabel next to the row's "Label"
+    local function consider(d)
+        if d:IsA("TextLabel") and d.Name ~= "Label" and d.AnchorPoint.X == 1 then task.defer(attach, d) end
+    end
+    for _, d in ipairs(win:GetDescendants()) do consider(d) end
+    win.DescendantAdded:Connect(consider)   -- sliders created later
+end)
+
+-- ── Key buttons (every keybind) ────────────────────────────────────────
+-- Restyles the key button of every keybind row in the menu as a small "keycap": an accent outline, a bright
+-- edge at the bottom, a soft highlight on top, hover glow, a press animation, and a pulsing outline while it waits
+-- for you to press a key. All colors follow the menu's accent color. To style a key button anywhere else call
+-- Nav.styleKeyButton(button) (the button is the one that shows the key name).
+safe("Key buttons", function()
+    local function style(btn)
+        btn.Font = FONTS.bold
+        btn.BackgroundColor3 = Color3.fromRGB(22, 22, 25)
+        local outline = btn:FindFirstChildOfClass("UIStroke") or stroke(btn, COLORS.accent, 1, 0.5)
+        Track.Stroke(outline); outline.Thickness = 1; outline.Transparency = 0.5
+
+        local edge = Instance.new("Frame", btn)   -- the bright bottom edge of the keycap
+        edge.AnchorPoint = Vector2.new(0.5, 1); edge.Position = UDim2.new(0.5, 0, 1, -1); edge.Size = UDim2.new(1, -8, 0, 2)
+        edge.BorderSizePixel = 0; edge.BackgroundTransparency = 0.35; edge.ZIndex = btn.ZIndex + 1
+        corner(edge, 1); Track.BG(edge)
+        local shine = Instance.new("Frame", btn)  -- a faint line of light on the top edge
+        shine.AnchorPoint = Vector2.new(0.5, 0); shine.Position = UDim2.new(0.5, 0, 0, 1); shine.Size = UDim2.new(1, -8, 0, 1)
+        shine.BorderSizePixel = 0; shine.BackgroundColor3 = Color3.new(1, 1, 1); shine.BackgroundTransparency = 0.88
+        shine.ZIndex = btn.ZIndex + 1
+        local press = Instance.new("UIScale", btn)
+
+        local hovering, pulse = false, nil
+        local fast = TweenInfo.new(0.12)
+        local function rest()   -- the look when nothing is happening
+            TweenService:Create(outline, fast, { Transparency = hovering and 0.1 or 0.5 }):Play()
+            TweenService:Create(edge, fast, { BackgroundTransparency = hovering and 0 or 0.35 }):Play()
+            TweenService:Create(btn, fast, { BackgroundColor3 = hovering and Color3.fromRGB(32, 32, 37) or Color3.fromRGB(22, 22, 25) }):Play()
+        end
+        btn.MouseEnter:Connect(function() hovering = true; if not pulse then rest() end end)
+        btn.MouseLeave:Connect(function()
+            hovering = false
+            TweenService:Create(press, fast, { Scale = 1 }):Play()
+            if not pulse then rest() end
+        end)
+        btn.MouseButton1Down:Connect(function() TweenService:Create(press, TweenInfo.new(0.07), { Scale = 0.93 }):Play() end)
+        btn.MouseButton1Up:Connect(function() TweenService:Create(press, TweenInfo.new(0.15, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = 1 }):Play() end)
+
+        -- the library writes "..." on the button while it waits for a key
+        btn:GetPropertyChangedSignal("Text"):Connect(function()
+            local waiting = btn.Text == "..."
+            if waiting and not pulse then
+                outline.Transparency = 0.1; edge.BackgroundTransparency = 0
+                pulse = TweenService:Create(outline, TweenInfo.new(0.45, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true), { Transparency = 0.85 })
+                pulse:Play()
+            elseif not waiting and pulse then
+                pulse:Cancel(); pulse = nil
+                rest()
+            end
+        end)
+    end
+    Nav.styleKeyButton = style
+
+    -- a keybind row is a frame with two buttons: the key button and the small on/off box next to it
+    local styled = setmetatable({}, { __mode = "k" })
+    local function considerRow(row)
+        if not row or not row:IsA("Frame") or styled[row] then return end
+        local buttons = {}
+        for _, c in ipairs(row:GetChildren()) do if c:IsA("TextButton") then buttons[#buttons + 1] = c end end
+        if #buttons ~= 2 then return end
+        local key, box = buttons[1], buttons[2]
+        if key.Size.X.Offset < box.Size.X.Offset then key, box = box, key end
+        if box.Text == "x" or box.Text == "\u{2713}" then styled[row] = true; style(key) end
+    end
+    local window = screenGui:FindFirstChild("MenuWindow")
+    if not window then return end
+    for _, d in ipairs(window:GetDescendants()) do
+        if d:IsA("TextButton") and (d.Text == "x" or d.Text == "\u{2713}") then considerRow(d.Parent) end
+    end
+    window.DescendantAdded:Connect(function(d)   -- keybinds created later (by the third module, for example)
+        if d:IsA("TextButton") and (d.Text == "x" or d.Text == "\u{2713}") then task.defer(considerRow, d.Parent) end
+    end)
+end)
+
+-- ── Button style (every button in the menu) ─────────────────────────────
+-- Every button of the menu (the ones the library draws as a wide colored bar) is restyled here as a compact pill on
+-- the RIGHT of its row; if the button has an entry in BUTTON_INFO, that text is shown on the LEFT and says what it does.
+-- The pill has a light outline, a soft shine on top, an accent glow on hover and a gentle press. Click sound, History
+-- entry, search and Callback still come from the library. Buttons added later are restyled too. Colors follow the
+-- menu's accent color. To restyle a button by hand: Nav.styleSmallButton(button, description), where button is the
+-- colored TextButton inside the button's row.
+safe("Button style", function()
+    -- button text (what is written on the pill) = what it does (shown on the left). Buttons that are not listed here
+    -- get only the pill.
+    local BUTTON_INFO = {
+        ["Rejoin"]        = "Reconnects you to this server",
+        ["Server Hop"]    = "Joins another public server",
+        ["Bubble Theme"]  = "Decorative bubbles on buttons and tabs",
+        ["Solid Theme"]   = "Flat look without bubbles",
+    }
+    Nav.buttonInfo = BUTTON_INFO   -- the third module adds the descriptions of its own buttons here
+    local TextService = game:GetService("TextService")
+    local win = screenGui:FindFirstChild("MenuWindow")
+    if not win then return end
+    local done = setmetatable({}, { __mode = "k" })
+
+    -- the library draws a button as: Frame row > TextButton (empty text, full width) > TextLabel with the name
+    local function isLibraryButton(btn)
+        return btn:IsA("TextButton") and btn.Text == "" and btn.Size.X.Scale == 1 and btn.Size.X.Offset == -12
+            and btn.Parent and btn.Parent:IsA("Frame") and btn:FindFirstChildWhichIsA("TextLabel") ~= nil
+    end
+
+    local function style(btn, description)
+        if done[btn] then return end
+        done[btn] = true
+        local name = btn:FindFirstChildWhichIsA("TextLabel")
+        local width = 62
+        if name then   -- as wide as its text needs
+            local ok, size = pcall(function()
+                return TextService:GetTextSize(name.Text, name.TextSize, name.Font, Vector2.new(10000, 10000))
+            end)
+            if ok then width = math.clamp(size.X + 26, 62, 170) end
+        end
+        btn.AnchorPoint = Vector2.new(1, 0.5); btn.Position = UDim2.new(1, -6, 0.5, 0)
+        btn.Size = UDim2.fromOffset(width, 18)
+        for _, c in ipairs(btn:GetChildren()) do
+            if c:IsA("UICorner") then c.CornerRadius = UDim.new(0, 9) end   -- pill shape
+        end
+        local tint = Instance.new("UIGradient", btn)   -- lighter at the top, a little darker at the bottom
+        tint.Rotation = 90
+        tint.Color = ColorSequence.new(Color3.new(1, 1, 1), Color3.fromRGB(185, 185, 185))
+        local outline = stroke(btn, Color3.new(1, 1, 1), 1, 0.8)
+        local glow = Track.Stroke(stroke(btn, COLORS.accent, 3, 1))   -- invisible until hover
+        local shine = Instance.new("Frame", btn)   -- a thin light line near the top edge
+        shine.AnchorPoint = Vector2.new(0.5, 0); shine.Position = UDim2.new(0.5, 0, 0, 2); shine.Size = UDim2.new(1, -14, 0, 1)
+        shine.BorderSizePixel = 0; shine.BackgroundColor3 = Color3.new(1, 1, 1); shine.BackgroundTransparency = 0.8
+        shine.ZIndex = 9
+        corner(shine, 1)
+        local fast = TweenInfo.new(0.12)
+        btn.MouseEnter:Connect(function()
+            TweenService:Create(outline, fast, { Transparency = 0.35 }):Play()
+            TweenService:Create(glow, fast, { Transparency = 0.6 }):Play()
+            TweenService:Create(shine, fast, { BackgroundTransparency = 0.55 }):Play()
+        end)
+        btn.MouseLeave:Connect(function()
+            TweenService:Create(outline, fast, { Transparency = 0.8 }):Play()
+            TweenService:Create(glow, fast, { Transparency = 1 }):Play()
+            TweenService:Create(shine, fast, { BackgroundTransparency = 0.8 }):Play()
+        end)
+        btn.MouseButton1Down:Connect(function()
+            TweenService:Create(outline, TweenInfo.new(0.06), { Transparency = 0 }):Play()
+            TweenService:Create(glow, TweenInfo.new(0.06), { Transparency = 0.3 }):Play()
+        end)
+
+        -- the text on the left: a small accent bar and what the button does
+        local row = btn.Parent
+        if description and row then
+            local bar = Instance.new("Frame", row)
+            bar.AnchorPoint = Vector2.new(0, 0.5); bar.Position = UDim2.new(0, 6, 0.5, 0); bar.Size = UDim2.fromOffset(3, 12)
+            bar.BorderSizePixel = 0; corner(bar, 2); Track.BG(bar)
+            label(row, "TextLabel", { Position = UDim2.fromOffset(16, 0), Size = UDim2.new(1, -(16 + width + 14), 1, 0),
+                Text = description, TextSize = 13, Font = FONTS.default, TextColor3 = COLORS.text,
+                TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd, Category = "Labels" })
+        end
+    end
+    Nav.styleSmallButton = function(btn, description) if isLibraryButton(btn) then style(btn, description) end end
+
+    local function consider(d)
+        if d:IsA("TextButton") then
+            task.defer(function()   -- wait until the library has finished drawing the button
+                if isLibraryButton(d) then
+                    local name = d:FindFirstChildWhichIsA("TextLabel")
+                    style(d, name and BUTTON_INFO[name.Text])
+                end
+            end)
+        end
+    end
+    for _, d in ipairs(win:GetDescendants()) do consider(d) end
+    win.DescendantAdded:Connect(consider)   -- buttons created later
+end)
+
+-- ── Smooth sections (the ^ arrows) ──────────────────────────────────────
+-- The small arrow on every section header folds the section's functions away. The library does that instantly; here the
+-- arrow is replaced by an identical one that folds the section smoothly: the functions shrink to nothing one under another
+-- (and grow back when it opens), the header text fades, and the arrow turns instead of changing its symbol. Nothing else
+-- changes: a folded section looks as before (only the arrow stays). Sections that are added later are handled too.
+-- Nav.expandSection(header, instant) / Nav.collapseSection(header, instant) open and close a section from code.
+safe("Smooth sections", function()
+    local window = screenGui:FindFirstChild("MenuWindow")
+    if not window then return end
+    local TIME = 0.24
+    local states = setmetatable({}, { __mode = "k" })
+
+    local function isHeader(f) return f:IsA("Frame") and f:GetAttribute("DyserSection") == true end
+
+    -- the functions that belong to a header: everything under it up to the next header (so a function you moved here counts)
+    local function groupOf(header)
+        local list = {}
+        for i, c in ipairs(header.Parent:GetChildren()) do
+            if c:IsA("GuiObject") then list[#list + 1] = { obj = c, idx = i } end
+        end
+        table.sort(list, function(a, b)
+            if a.obj.LayoutOrder ~= b.obj.LayoutOrder then return a.obj.LayoutOrder < b.obj.LayoutOrder end
+            return a.idx < b.idx
+        end)
+        local rows, found = {}, false
+        for _, e in ipairs(list) do
+            if e.obj == header then found = true
+            elseif found then
+                if isHeader(e.obj) then break end
+                rows[#rows + 1] = e.obj
+            end
+        end
+        return rows
+    end
+
+    local function setCollapsed(header, collapse, instant)
+        local st = states[header]
+        if not st or st.collapsed == collapse or st.busy then return end
+        st.collapsed = collapse
+        local info = TweenInfo.new(TIME, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+        local function go(obj, props)
+            if instant then
+                for k, v in pairs(props) do obj[k] = v end
+            else
+                TweenService:Create(obj, info, props):Play()
+            end
+        end
+
+        go(st.arrow, { Rotation = collapse and 90 or 0 })
+        for _, part in ipairs(st.parts) do
+            if not collapse then part.obj.Visible = true end
+            go(part.obj, { [part.prop] = collapse and 1 or part.shown })
+        end
+
+        local moving = {}
+        if collapse then
+            st.hidden = {}
+            for _, row in ipairs(groupOf(header)) do
+                if row.Visible then
+                    local entry = { row = row, size = row.Size, clip = row.ClipsDescendants }
+                    st.hidden[#st.hidden + 1] = entry
+                    row.ClipsDescendants = true
+                    go(row, { Size = UDim2.new(entry.size.X.Scale, entry.size.X.Offset, 0, 0) })
+                end
+            end
+        else
+            for _, entry in ipairs(st.hidden or {}) do
+                local row = entry.row
+                if row.Parent then
+                    row.ClipsDescendants = true
+                    row.Size = UDim2.new(entry.size.X.Scale, entry.size.X.Offset, 0, 0)
+                    row.Visible = true
+                    go(row, { Size = entry.size })
+                end
+            end
+        end
+
+        local function finish()
+            if collapse then
+                for _, entry in ipairs(st.hidden) do
+                    entry.row.Visible = false; entry.row.Size = entry.size; entry.row.ClipsDescendants = entry.clip
+                end
+                for _, part in ipairs(st.parts) do part.obj.Visible = false end
+            else
+                for _, entry in ipairs(st.hidden or {}) do entry.row.ClipsDescendants = entry.clip end
+                st.hidden = {}
+            end
+            st.busy = false
+        end
+        if instant then finish()
+        else st.busy = true; task.delay(TIME + 0.03, finish) end
+    end
+
+    Nav.expandSection = function(header, instant) setCollapsed(header, false, instant) end
+    Nav.collapseSection = function(header, instant) setCollapsed(header, true, instant) end
+
+    -- a section header is a plain frame with a label, two lines and a small square "^" button
+    local function attach(header)
+        if not header or not header:IsA("Frame") or header.Active or header:GetAttribute("DyserSection") then return end
+        if not (header.Parent and header.Parent:IsA("ScrollingFrame")) then return end
+        local arrow
+        for _, c in ipairs(header:GetChildren()) do
+            -- a small square button anchored at the right (16x16 on the left side; the library makes it bigger on the right-hand
+            -- tabs, so the exact size is not compared)
+            if c:IsA("TextButton") and c.Text == "^" and c.AnchorPoint == Vector2.new(1, 0)
+                and c.Size.X.Scale == 0 and c.Size.Y.Scale == 0
+                and c.Size.X.Offset == c.Size.Y.Offset and c.Size.X.Offset >= 10 and c.Size.X.Offset <= 40 then
+                arrow = c; break
+            end
+        end
+        if not arrow or not header:FindFirstChildWhichIsA("TextLabel") then return end
+        header:SetAttribute("DyserSection", true)
+
+        local mine = arrow:Clone()     -- looks exactly like the library's arrow
+        mine.Text = "^"; mine.Rotation = 0
+        arrow.Visible = false          -- the library's own arrow (and its instant folding) is put away
+        mine.Visible = true
+        mine.Parent = header
+        bindCursorHover(mine)
+
+        local st = { arrow = mine, parts = {}, collapsed = false, hidden = {} }
+        for _, c in ipairs(header:GetChildren()) do
+            if c:IsA("Frame") then st.parts[#st.parts + 1] = { obj = c, prop = "BackgroundTransparency", shown = c.BackgroundTransparency }
+            elseif c:IsA("TextLabel") then st.parts[#st.parts + 1] = { obj = c, prop = "TextTransparency", shown = c.TextTransparency } end
+        end
+        states[header] = st
+        mine.MouseButton1Click:Connect(function()
+            playsfx("click")
+            setCollapsed(header, not st.collapsed)
+        end)
+    end
+
+    for _, page in ipairs(window:GetDescendants()) do
+        if page:IsA("ScrollingFrame") and page.Name:sub(-4) == "Page" then
+            for _, c in ipairs(page:GetChildren()) do attach(c) end
+        end
+    end
+    window.DescendantAdded:Connect(function(d)   -- sections created later
+        if d:IsA("TextButton") and d.Text == "^" then task.defer(attach, d.Parent) end
+    end)
+end)
+
+-- ── Smooth panels and dropdown arrows ───────────────────────────────────
+-- Every other place that opens and closes gets the same smooth animation as the sections:
+--   * the "^" arrow next to "General" folds the whole left panel, the one next to "Preview" folds the right-hand panel:
+--     the panel rolls up (and rolls down again) instead of vanishing. The arrow turns instead of changing its symbol.
+--     The arrow looks at what is on the screen, so it also stays right after a top tab was switched or the search
+--     opened a tab.
+--   * the arrow of a dropdown list turns while the list opens and closes (the list itself already slides in the library).
+-- (The library's own arrows are put away and replaced by identical ones, as for the sections.)
+safe("Smooth panels", function()
+    local window = screenGui:FindFirstChild("MenuWindow")
+    if not window then return end
+    local TIME = 0.24
+    local content = window:FindFirstChild("Content", true)
+    local rightPane = window:FindFirstChild("RightPane", true)
+    if not content or not rightPane then warn("[Dyser] Smooth panels: the panels were not found."); return end
+
+    local divider   -- the thin line between the two panels
+    for _, c in ipairs(content:GetChildren()) do
+        if c:IsA("Frame") and c.Size == UDim2.new(0, 1, 1, 0) then divider = c; break end
+    end
+
+    local function leftPanes()   -- the library's own pane and the pane of every top tab; one of them is on the screen
+        local list = {}
+        for _, c in ipairs(content:GetChildren()) do
+            if c:IsA("GuiObject") and (c.Name == "LeftPane" or c.Name:sub(-9) == "_LeftPane") then list[#list + 1] = c end
+        end
+        return list
+    end
+    local function visibleLeftPane()
+        for _, p in ipairs(leftPanes()) do if p.Visible then return p end end
+    end
+    local function paneOfSelectedTab()
+        for _, e in ipairs(Nav.topTabBtns) do
+            if e.button == Nav.selectedTop then
+                return content:FindFirstChild(e.name .. "_LeftPane") or content:FindFirstChild("LeftPane")
+            end
+        end
+        return content:FindFirstChild("LeftPane")
+    end
+
+    -- rolls a panel up (hide = true) or down (hide = false); its height goes to zero, it is clipped
+    local fullSizes = setmetatable({}, { __mode = "k" })
+    local function roll(pane, hide)
+        if not pane then return end
+        local info = TweenInfo.new(TIME, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+        if hide then
+            fullSizes[pane] = pane.Size
+            local full = pane.Size
+            pane.ClipsDescendants = true
+            TweenService:Create(pane, info, { Size = UDim2.new(full.X.Scale, full.X.Offset, 0, 0) }):Play()
+            task.delay(TIME + 0.03, function() pane.Visible = false; pane.Size = full end)
+        else
+            local full = fullSizes[pane] or pane.Size
+            pane.ClipsDescendants = true
+            pane.Size = UDim2.new(full.X.Scale, full.X.Offset, 0, 0)
+            pane.Visible = true
+            TweenService:Create(pane, info, { Size = full }):Play()
+        end
+    end
+
+    local function takeOver(titleText, onClick, isFolded)
+        local holder, arrow
+        for _, d in ipairs(window:GetDescendants()) do
+            if d:IsA("TextLabel") and d.Text == titleText then
+                local b = d:FindFirstChildWhichIsA("TextButton")
+                if b and b.Text == "^" then holder, arrow = d, b; break end
+            end
+        end
+        if not arrow then warn("[Dyser] Smooth panels: the arrow next to '" .. titleText .. "' was not found."); return end
+        local mine = arrow:Clone()
+        mine.Text = "^"; mine.Rotation = 0; mine.Visible = true
+        arrow.Visible = false
+        mine.Parent = holder
+        bindCursorHover(mine)
+        local busy = false
+        local function pointTo(folded)
+            TweenService:Create(mine, TweenInfo.new(TIME, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Rotation = folded and 90 or 0 }):Play()
+        end
+        mine.MouseButton1Click:Connect(function()
+            if busy then return end
+            busy = true
+            playsfx("click")
+            local folded = onClick()
+            pointTo(folded)
+            task.delay(TIME + 0.05, function() busy = false end)
+        end)
+        task.spawn(function()   -- keep the arrow right when the panel was changed by something else
+            local last
+            while mine.Parent do
+                task.wait(0.25)
+                if not busy then
+                    local folded = isFolded()
+                    if folded ~= last then last = folded; pointTo(folded) end
+                end
+            end
+        end)
+    end
+
+    -- "General" folds the left panel (the one that is on the screen)
+    takeOver("General", function()
+        local pane = visibleLeftPane()
+        if pane then
+            roll(pane, true)
+            if divider then TweenService:Create(divider, TweenInfo.new(TIME), { BackgroundTransparency = 1 }):Play() end
+            return true
+        end
+        roll(paneOfSelectedTab(), false)
+        if divider then TweenService:Create(divider, TweenInfo.new(TIME), { BackgroundTransparency = 0 }):Play() end
+        return false
+    end, function() return visibleLeftPane() == nil end)
+
+    -- "Preview" folds the right-hand panel
+    takeOver("Preview", function()
+        if rightPane.Visible then roll(rightPane, true); return true end
+        roll(rightPane, false)
+        return false
+    end, function() return not rightPane.Visible end)
+
+    -- dropdown arrows: the library switches a small label between "v" and "^"; that label is hidden and a copy of the "v"
+    -- turns instead
+    local function attachDropdownArrow(lbl)
+        if not lbl or lbl:GetAttribute("DyserArrow") or lbl.Text ~= "v" then return end
+        local button = lbl.Parent
+        if not (button and button:IsA("TextButton") and button.Parent and button.Parent:IsA("Frame")) then return end
+        lbl:SetAttribute("DyserArrow", true)
+        local mine = lbl:Clone()
+        mine.Text = "v"; mine.Rotation = 0
+        Track.TextElement(mine)   -- follows the accent color like the original
+        mine.Parent = button
+        lbl.TextTransparency = 1
+        lbl:GetPropertyChangedSignal("Text"):Connect(function()
+            TweenService:Create(mine, TweenInfo.new(TIME, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+                { Rotation = lbl.Text == "^" and 180 or 0 }):Play()
+        end)
+    end
+    for _, d in ipairs(window:GetDescendants()) do
+        if d:IsA("TextLabel") then attachDropdownArrow(d) end
+    end
+    window.DescendantAdded:Connect(function(d)   -- dropdowns created later
+        if d:IsA("TextLabel") and d.Text == "v" then task.defer(attachDropdownArrow, d) end
+    end)
+end)
+
+-- ── 4. Draggable tabs ──────────────────────────────────────────────────
+-- Press a tab and drag it along its bar to put it where you want: top tabs, side tabs and the right-hand tabs.
+-- A press without movement is still a normal click. Mouse only (on touch screens the bars scroll instead).
+-- While you drag, a floating copy of the tab follows the mouse and the real tab (dimmed) shows where it will land.
+-- The order lasts for the session. For tabs created later, call Nav.makeTabDraggable(button, "X") (or "Y" for a vertical list).
+safe("Draggable tabs", function()
+    local window = screenGui:FindFirstChild("MenuWindow")
+    if not window then return end
+    local RunService = game:GetService("RunService")
+    local THRESHOLD = 8      -- pixels the mouse must move before a press turns into a drag
+    local busy = false       -- only one tab can be dragged at a time
+
+    -- the tabs that live in the same bar, in their current visual order (left to right / top to bottom)
+    local function siblingsOf(btn, axis)
+        local list = {}
+        for _, b in ipairs(btn.Parent:GetChildren()) do
+            if b:GetAttribute("DyserTab") and b.Visible then table.insert(list, b) end
+        end
+        table.sort(list, function(a, b) return a.AbsolutePosition[axis] < b.AbsolutePosition[axis] end)
+        return list
+    end
+
+    local function attach(btn, axis)   -- axis: "X" for horizontal bars, "Y" for a vertical list
+        if btn:GetAttribute("DyserTab") then return end   -- already draggable
+        btn:SetAttribute("DyserTab", true)
+        btn.InputBegan:Connect(function(input)
+            if input.UserInputType ~= Enum.UserInputType.MouseButton1 or busy then return end
+            local start = UserInputService:GetMouseLocation()
+            local scale = math.max(uiScale.Scale, 0.01)
+            -- only DIFFERENCES between positions are used below, so it does not matter that Position and AbsolutePosition
+            -- are not in the same coordinate space in this menu
+            local startCenter = btn.AbsolutePosition + btn.AbsoluteSize / 2
+            local startLocal = (btn.AbsolutePosition - window.AbsolutePosition) / scale   -- button position inside the window
+            local oldTransparency = btn.BackgroundTransparency
+            local conn, ghost, moved
+
+            local function finish()
+                if conn then conn:Disconnect(); conn = nil end
+                if ghost then ghost:Destroy(); ghost = nil end
+                if moved then btn.BackgroundTransparency = oldTransparency end
+                busy = false
+            end
+
+            local function step()
+                if not btn.Parent or not window.Parent then finish(); return end
+                if not UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) then finish(); return end
+                local delta = UserInputService:GetMouseLocation() - start
+                if not moved then
+                    if delta.Magnitude < THRESHOLD then return end
+                    moved, busy = true, true
+                    -- floating copy of the tab (a child of the window, so it scales like the rest of the menu)
+                    ghost = btn:Clone()
+                    ghost:SetAttribute("DyserTab", nil)
+                    ghost.Active = false
+                    ghost.AnchorPoint = Vector2.new(0, 0)
+                    ghost.Size = UDim2.fromOffset(btn.AbsoluteSize.X / scale, btn.AbsoluteSize.Y / scale)
+                    ghost.ZIndex = 300
+                    ghost.BackgroundTransparency = 0.15
+                    ghost.Parent = window
+                    btn.BackgroundTransparency = 0.65   -- the real tab is dimmed: it marks where the tab will land
+                end
+                ghost.Position = UDim2.fromOffset(startLocal.X + delta.X / scale, startLocal.Y + delta.Y / scale)
+
+                -- the tab takes the slot under the center of the floating copy
+                local center = startCenter[axis] + delta[axis]
+                local list = siblingsOf(btn, axis)
+                local current = table.find(list, btn)
+                local target = 1
+                for _, b in ipairs(list) do
+                    if b ~= btn and (b.AbsolutePosition[axis] + b.AbsoluteSize[axis] / 2) < center then target = target + 1 end
+                end
+                if current and target ~= current then
+                    table.remove(list, current)
+                    table.insert(list, target, btn)
+                    for i, b in ipairs(list) do b.LayoutOrder = i end
+                end
+            end
+
+            conn = RunService.RenderStepped:Connect(function()
+                local ok, err = pcall(step)
+                if not ok then warn("[Dyser] tab drag stopped: " .. tostring(err)); finish() end
+            end)
+        end)
+    end
+    Nav.makeTabDraggable = attach
+
+    local function scanTabs()   -- also called by Nav.refresh() after tabs were created later
+        for _, e in ipairs(Nav.topTabBtns) do attach(e.button, "X") end
+        for _, e in ipairs(Nav.rightTabBtns) do attach(e.button, "X") end
+        for _, e in ipairs(Nav.sideButtons) do attach(e.button, "Y") end   -- the built-in side list (empty unless SIDE_TABS is used)
+        -- side tabs made with AddSideTab live in one panel per top tab, named "<top tab>_SidePanel"
+        local body = window:FindFirstChild("Body")
+        if body then
+            for _, panel in ipairs(body:GetChildren()) do
+                if panel:IsA("ScrollingFrame") and panel.Name:sub(-10) == "_SidePanel" then
+                    for _, b in ipairs(panel:GetChildren()) do
+                        if b:IsA("TextButton") then attach(b, "Y") end
+                    end
+                end
+            end
+        end
+    end
+    Nav.scanTabs = scanTabs
+    scanTabs()
+end)
+
+-- ── 5. Movable functions ───────────────────────────────────────────────
+-- Hold LEFT SHIFT and drag a function: up or down to move it inside its group (the rows between two section headers), or
+-- onto a tab button (a side tab, a top tab or a right-hand tab) to move it to that tab. The tab lights up while you are
+-- over it; release the mouse to drop. Moves are recorded in History (the revert button puts the function back).
+-- While Shift is held every function is tinted so you can see that it can be moved; nothing is added to the menu otherwise.
+-- (Shift is used because sliders, inputs and buttons already use plain mouse presses.) Everything lasts for the session.
+-- It can be switched off in Settings > Layout > Move Functions. For rows created later: Nav.makeRowMovable(row, page).
+-- Note: the menu search still points a moved function to the tab it was created on.
+safe("Movable functions", function()
+    local window = screenGui:FindFirstChild("MenuWindow")
+    if not window then return end
+    local RunService = game:GetService("RunService")
+    local THRESHOLD = 6    -- pixels the mouse must move before a press turns into a drag
+    local busy = false     -- only one function can be dragged at a time
+    local movable = {}     -- registered functions: { row = Frame, page = ScrollingFrame }
+    local covers = {}      -- the tinted covers that exist while Shift is held
+
+    -- all children of a page in their display order: LayoutOrder first, then creation order (what UIListLayout does)
+    local function orderedChildren(page)
+        local list = {}
+        for i, c in ipairs(page:GetChildren()) do
+            if c:IsA("GuiObject") then table.insert(list, { obj = c, idx = i }) end
+        end
+        table.sort(list, function(a, b)
+            if a.obj.LayoutOrder ~= b.obj.LayoutOrder then return a.obj.LayoutOrder < b.obj.LayoutOrder end
+            return a.idx < b.idx
+        end)
+        local out = {}
+        for _, e in ipairs(list) do table.insert(out, e.obj) end
+        return out
+    end
+
+    -- rows start with equal LayoutOrder, so give every child its own number (same visual order) before the first move
+    local function normalize(page)
+        if page:GetAttribute("DyserOrdered") then return end
+        for i, c in ipairs(orderedChildren(page)) do c.LayoutOrder = i end
+        page:SetAttribute("DyserOrdered", true)
+    end
+
+    local function nameOf(row)
+        local l = row:FindFirstChild("Label")
+        if l and l:IsA("TextLabel") and l.Text ~= "" then return l.Text end
+        for _, d in ipairs(row:GetDescendants()) do
+            if d:IsA("TextLabel") and d.Text ~= "" then return d.Text end
+        end
+        return "function"
+    end
+
+    -- the tabs a function can be dropped on: the side tabs of the open top tab, the top tabs (they open their first side
+    -- tab) and the right-hand tabs. Info and History are not lists of functions, so they are left out.
+    local function collectTargets()
+        local list = {}
+        for _, d in ipairs(window:GetDescendants()) do
+            if d:IsA("ScrollingFrame") and d.Name:sub(-10) == "_SidePanel" then
+                local pane = window:FindFirstChild(d.Name:sub(1, -11) .. "_LeftPane", true)
+                for _, b in ipairs(d:GetChildren()) do
+                    local t = b:IsA("TextButton") and b:FindFirstChildWhichIsA("TextLabel")
+                    local pg = t and pane and pane:FindFirstChild(t.Text .. "Page")
+                    if pg then table.insert(list, { button = b, page = pg, name = t.Text }) end
+                end
+            end
+        end
+        for _, e in ipairs(Nav.topTabBtns) do
+            local pane = window:FindFirstChild(e.name .. "_LeftPane", true)
+            local first
+            for _, c in ipairs(pane and pane:GetChildren() or {}) do
+                if c:IsA("ScrollingFrame") and c.Name:sub(-4) == "Page" then first = c; break end
+            end
+            if first then table.insert(list, { button = e.button, page = first, name = e.name }) end
+        end
+        for _, e in ipairs(Nav.rightTabBtns) do
+            local pg = Nav.rightTabPgs[e.name]
+            if pg and e.name ~= "Info" and e.name ~= "History" then table.insert(list, { button = e.button, page = pg, name = e.name }) end
+        end
+        return list
+    end
+
+    local function shown(obj)   -- the object and everything above it up to the window is visible
+        local o = obj
+        while o and o ~= window do
+            if o:IsA("GuiObject") and not o.Visible then return false end
+            o = o.Parent
+        end
+        return o == window and window.Visible
+    end
+
+    -- which tab button the mouse is over (the same way the library finds the mouse inside the window: the GUI inset is
+    -- taken off the mouse position first)
+    local function targetAt(targets, exceptPage)
+        local mp = UserInputService:GetMouseLocation() - Vector2.new(0, Nav.guiInset and Nav.guiInset() or 0)
+        for _, t in ipairs(targets) do
+            local b = t.button
+            if t.page ~= exceptPage and b.Parent and shown(b) then
+                local p, s = b.AbsolutePosition, b.AbsoluteSize
+                if mp.X >= p.X and mp.X <= p.X + s.X and mp.Y >= p.Y and mp.Y <= p.Y + s.Y then return t end
+            end
+        end
+    end
+
+    -- puts the function at the end of another tab; the History entry moves it back
+    local function moveRow(entry, target)
+        local row, from = entry.row, entry.page
+        local oldOrder = row.LayoutOrder
+        normalize(from); normalize(target.page)
+        local last = 0
+        for _, c in ipairs(target.page:GetChildren()) do
+            if c:IsA("GuiObject") then last = math.max(last, c.LayoutOrder) end
+        end
+        local function put(toPage, order)
+            row.LayoutOrder = order; row.Parent = toPage; entry.page = toPage
+        end
+        put(target.page, last + 1)
+        AddLog('Moved "' .. nameOf(row) .. '" to ' .. target.name, COLORS.accent)
+        pcall(function()
+            Dyser:AddHistory("↔ " .. nameOf(row) .. " → " .. target.name, COLORS.text, function() put(from, oldOrder) end)
+        end)
+    end
+
+    -- entry = { row, page }: drag the function up or down inside its group, or onto a tab button to move it to that tab
+    local function startDrag(entry)
+        if busy then return end
+        local row = entry.row
+        local start = UserInputService:GetMouseLocation()
+        local scale = math.max(uiScale.Scale, 0.01)
+        -- only DIFFERENCES between positions are used below, so the menu's mixed coordinate spaces do not matter
+        local startCenterY = row.AbsolutePosition.Y + row.AbsoluteSize.Y / 2
+        local startLocal = (row.AbsolutePosition - window.AbsolutePosition) / scale
+        local oldTransparency = row.BackgroundTransparency
+        local conn, ghost, ghostText, moved, targets, dropTarget, mark, markTarget
+
+        local function setMark(t)   -- outline the tab the function would land on
+            if t == markTarget then return end
+            if mark then mark:Destroy(); mark = nil end
+            markTarget = t
+            if t then
+                mark = Instance.new("UIStroke"); mark.Name = "DyserDropMark"; mark.Color = COLORS.accent; mark.Thickness = 2
+                mark.ApplyStrokeMode = Enum.ApplyStrokeMode.Border; mark.Parent = t.button
+            end
+            if ghostText then ghostText.Text = t and (nameOf(row) .. "  →  " .. t.name) or nameOf(row) end
+        end
+
+        local function finish()
+            setMark(nil)
+            if conn then conn:Disconnect(); conn = nil end
+            if ghost then ghost:Destroy(); ghost = nil end
+            if moved then row.BackgroundTransparency = oldTransparency end
+            busy = false
+        end
+
+        local function step()
+            if not row.Parent or not window.Parent or Nav.movingEnabled == false then finish(); return end
+            if not UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) then
+                if moved and dropTarget then pcall(moveRow, entry, dropTarget) end   -- released over a tab: move it there
+                finish(); return
+            end
+            local delta = UserInputService:GetMouseLocation() - start
+            if not moved then
+                if delta.Magnitude < THRESHOLD then return end
+                moved, busy = true, true
+                targets = collectTargets()
+                -- floating label that follows the mouse (a plain frame: copying the real row would copy its widgets)
+                ghost = Instance.new("Frame")
+                ghost.Size = UDim2.fromOffset(row.AbsoluteSize.X / scale, row.AbsoluteSize.Y / scale)
+                ghost.BackgroundColor3 = Color3.fromRGB(18, 18, 22); ghost.BackgroundTransparency = 0.05
+                ghost.BorderSizePixel = 0; ghost.Active = false; ghost.ZIndex = 300
+                corner(ghost, 4); stroke(ghost, COLORS.accent, 1.5, 0.1)
+                ghostText = label(ghost, "TextLabel", { Position = UDim2.fromOffset(10, 0), Size = UDim2.new(1, -20, 1, 0), Text = nameOf(row),
+                    TextSize = RS.f(12), Font = FONTS.bold, TextColor3 = COLORS.accent, TextTruncate = Enum.TextTruncate.AtEnd })
+                ghost.Parent = window
+                row.BackgroundTransparency = 0.7   -- the real row is dimmed: it marks where the function will land
+            end
+            ghost.Position = UDim2.fromOffset(startLocal.X + delta.X / scale, startLocal.Y + delta.Y / scale)
+
+            dropTarget = targetAt(targets, entry.page)
+            setMark(dropTarget)
+            if dropTarget then return end   -- over a tab: no reordering, the function will move there
+
+            -- the function takes the slot under the floating label, but only inside its own group of movable rows
+            local page = entry.page
+            normalize(page)
+            local ordered = orderedChildren(page)
+            local idx = table.find(ordered, row)
+            if not idx then return end
+            local s, e = idx, idx
+            while s > 1 and ordered[s - 1]:GetAttribute("DyserRow") and ordered[s - 1].Visible do s = s - 1 end
+            while e < #ordered and ordered[e + 1]:GetAttribute("DyserRow") and ordered[e + 1].Visible do e = e + 1 end
+            local center = startCenterY + delta.Y
+            local target = s
+            for i = s, e do
+                local r = ordered[i]
+                if r ~= row and (r.AbsolutePosition.Y + r.AbsoluteSize.Y / 2) < center then target = target + 1 end
+            end
+            if target ~= idx then
+                table.remove(ordered, idx)
+                table.insert(ordered, target, row)
+                for i = s, e do ordered[i].LayoutOrder = i end
+            end
+        end
+
+        conn = RunService.RenderStepped:Connect(function()
+            local ok, err = pcall(step)
+            if not ok then warn("[Dyser] function drag stopped: " .. tostring(err)); finish() end
+        end)
+    end
+
+    local function shiftDown() return UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) end
+
+    local function hideCovers()
+        for c in pairs(covers) do c:Destroy() end
+        covers = {}
+    end
+    Nav.hideMoveCovers = hideCovers
+    local function showCovers()
+        if next(covers) or Nav.movingEnabled == false then return end
+        for _, m in ipairs(movable) do
+            local row = m.row
+            if row.Parent then
+                -- a transparent button over the function: it takes the press, so the slider / box / button under it is not touched
+                local c = Instance.new("TextButton")
+                c.Name = "DyserMoveCover"; c.Size = UDim2.new(1, 0, 1, 0); c.Text = ""
+                c.BackgroundColor3 = COLORS.accent; c.BackgroundTransparency = 0.9; c.BorderSizePixel = 0
+                c.AutoButtonColor = false; c.ZIndex = 50
+                corner(c, 4)
+                c.MouseEnter:Connect(function() c.BackgroundTransparency = 0.75 end)
+                c.MouseLeave:Connect(function() c.BackgroundTransparency = 0.9 end)
+                c.InputBegan:Connect(function(input)
+                    if input.UserInputType ~= Enum.UserInputType.MouseButton1 then return end
+                    if not shiftDown() or Nav.movingEnabled == false then hideCovers(); return end   -- Shift was released without us noticing
+                    startDrag(m)
+                end)
+                c.Parent = row
+                covers[c] = true
+            end
+        end
+    end
+    UserInputService.InputBegan:Connect(function(input)
+        if input.KeyCode == Enum.KeyCode.LeftShift and screenGui.Enabled then showCovers() end
+    end)
+    UserInputService.InputEnded:Connect(function(input)
+        if input.KeyCode == Enum.KeyCode.LeftShift then hideCovers() end
+    end)
+
+    local function attachRow(row, page)
+        if row:GetAttribute("DyserRow") then return end
+        row:SetAttribute("DyserRow", true)
+        table.insert(movable, { row = row, page = page })
+    end
+    Nav.makeRowMovable = attachRow
+
+    local function scanRows()   -- also called by Nav.refresh() after tabs were created later
+        -- every function page ("<name>Page"): the right-hand tabs and the pages of your side tabs. Info and History are not lists of functions.
+        for _, d in ipairs(window:GetDescendants()) do
+            if d:IsA("ScrollingFrame") and d.Name:sub(-4) == "Page" and d.Name ~= "InfoPage" and d.Name ~= "HistoryPage" then
+                for _, c in ipairs(d:GetChildren()) do
+                    if c:IsA("Frame") and c.Active then attachRow(c, d) end
+                end
+            end
+        end
+    end
+    Nav.scanRows = scanRows
+    scanRows()
+end)
+
+-- ── 6. Hints ───────────────────────────────────────────────────────────
+-- Rest the mouse on a tab or a function for a moment to see what it does. To add or change a hint, edit HINTS below
+-- (the key is the name shown in the menu) or call Nav.setHint("Name", "text"). Nav.applyHints() attaches hints to
+-- anything that was created after this point.
+safe("Hints", function()
+    local HINTS = {
+        -- tabs
+        ["Info"] = "Information about you, your character, this game and server, and your device.",
+        ["Settings"] = "Menu hotkey, size, window behavior, rejoin, server hop, stats window, hints, moving functions and sound.",
+        ["History"] = "Everything you changed in the menu. Press Revert next to an entry to undo it.",
+        ["Themes"] = "Colors, transparency, rainbow and text sizes of the menu.",
+        ["Cursor"] = "Settings of the custom cursor that is shown over the menu.",
+
+        -- Themes
+        ["Bubble Theme"] = "Turns on the decorative bubbles on buttons and tabs.",
+        ["Solid Theme"] = "Turns the bubbles off for a flat, solid look.",
+        ["Accent Color (Buttons, etc.)"] = "The main color of the menu: buttons, tabs, borders and effects.",
+        ["Text Color (Global)"] = "Color of most of the text in the menu.",
+        ["Window Background"] = "Background color of the menu window.",
+        ["Panel Color"] = "Color of the side panel.",
+        ["Panel2 Color"] = "Color of the top bar and other secondary panels.",
+        ["Scrollbar Color"] = "Color of the scrollbars.",
+        ["Rainbow Accent (title, buttons, etc.)"] = "Makes the main menu color cycle through all colors.",
+        ["Rainbow Speed"] = "How fast the rainbow colors change.",
+        ["Cursor Rainbow Speed"] = "How fast the rainbow colors of the cursor change.",
+        ["Window BG"] = "Transparency of the window background (right = more see-through).",
+        ["TopBar"] = "Transparency of the top bar.",
+        ["Side Panel"] = "Transparency of the side panel.",
+        ["Top Tabs Size"] = "Text size of the top tabs.",
+        ["Side Tabs Size"] = "Text size of the side tabs.",
+        ["Copy / Save Buttons Size"] = "Text size of copy / save buttons.",
+        ["Regular Buttons Size"] = "Text size of regular buttons.",
+        ["Slider Text Size"] = "Text size of slider names and values.",
+        ["Input Fields Size"] = "Text size of text boxes.",
+        ["Palette Text Size"] = "Text size inside color pickers.",
+        ["Other Text Size"] = "Text size of all other labels.",
+
+        -- Settings
+        ["Open / Close Menu"] = "Click the button, then press the key that should open and close the menu. Escape or Backspace clears it.",
+        ["Size"] = "Makes the whole menu bigger or smaller, on top of the automatic scale for your screen.",
+        ["Allow Off-Screen Drag"] = "On: the menu can be dragged partly outside the screen. Off: it always stays fully inside.",
+        ["Rejoin"] = "Rejoins this game: the same server if other players are in it, otherwise a fresh server.",
+        ["Stats Window"] = "Shows FPS, ping, time and session time in the top-left corner.",
+        ["Hop To"] = "Which free server Server Hop picks: a random one, the emptiest or the fullest.",
+        ["Server Hop"] = "Leaves this server and joins another public server of this game that is not full.",
+        ["Move Functions"] = "On: hold Left Shift and drag a function to move it, or drop it on a tab. Off: nothing can be moved.",
+        ["Show Hints"] = "On: resting the mouse on a tab or function shows what it does. Off: all hints are hidden.",
+        ["Sound Enabled"] = "Turns the menu sounds on or off.",
+        ["Volume"] = "Volume of the menu sounds.",
+
+        -- Cursor
+        ["Enable Cursor"] = "Shows the custom cursor while the mouse is over the menu.",
+        ["Spin"] = "Makes the cursor ring and cross rotate.",
+        ["Spin Speed"] = "Rotation speed of the cursor, in degrees per second.",
+        ["Glow Size"] = "Size of the soft glow behind the cursor.",
+        ["Ring Size"] = "Size of the ring around the cursor.",
+        ["Dot Size"] = "Size of the dot in the middle.",
+        ["Cross Size"] = "Length of the cross lines.",
+        ["Glow Alpha"] = "Transparency of the glow (right = more see-through).",
+        ["Ring Alpha"] = "Transparency of the ring (right = more see-through).",
+        ["Rainbow"] = "Makes the cursor cycle through all colors.",
+        ["Cursor Color"] = "Color of the cursor (not used while Rainbow is on).",
+    }
+    local done = setmetatable({}, { __mode = "k" })   -- elements that already have a hint
+    local function hint(inst, name)
+        local text = name and HINTS[name]
+        if text and inst and not done[inst] then done[inst] = true; addTT(inst, text) end
+    end
+    local function firstText(inst)
+        local l = inst:FindFirstChild("Label")
+        if l and l:IsA("TextLabel") and l.Text ~= "" then return l.Text end
+        for _, d in ipairs(inst:GetDescendants()) do
+            if d:IsA("TextLabel") and d.Text ~= "" then return d.Text end
+        end
+    end
+
+    local function apply()
+        for _, e in ipairs(Nav.topTabBtns) do hint(e.button, e.name) end
+        for _, e in ipairs(Nav.rightTabBtns) do hint(e.button, e.name) end
+        local window = screenGui:FindFirstChild("MenuWindow")
+        if not window then return end
+        -- side tabs made with AddSideTab: one panel per top tab ("<top tab>_SidePanel")
+        local body = window:FindFirstChild("Body")
+        if body then
+            for _, panel in ipairs(body:GetChildren()) do
+                if panel:IsA("ScrollingFrame") and panel.Name:sub(-10) == "_SidePanel" then
+                    for _, b in ipairs(panel:GetChildren()) do
+                        if b:IsA("TextButton") then hint(b, firstText(b)) end
+                    end
+                end
+            end
+        end
+        -- functions: the rows of every function page
+        for _, d in ipairs(window:GetDescendants()) do
+            if d:IsA("ScrollingFrame") and d.Name:sub(-4) == "Page" and d.Name ~= "InfoPage" and d.Name ~= "HistoryPage" then
+                for _, c in ipairs(d:GetChildren()) do
+                    if c:IsA("Frame") then hint(c, firstText(c)) end
+                end
+            end
+        end
+    end
+    Nav.setHint = function(name, text) HINTS[name] = text end
+    Nav.getHint = function(name) return HINTS[name] end   -- used by the search
+    Nav.applyHints = apply
+    apply()
+end)
+
+
+-- ── 7. Search ──────────────────────────────────────────────────────────
+-- The search box of the menu (the first module has none; its frame is made here). The list of searchable things is built from what is in the menu AT THE
+-- MOMENT YOU SEARCH, so a function you moved to another tab is found in its new place. It finds functions, sections, tabs
+-- and the lines of the Info tab, and understands:
+--   * several words, in any order ("visual jump"): every word has to match something (the name, the text next to it, the
+--     hint, or the tab it is on)
+--   * the beginning of a word ("rej" finds Rejoin), a part of a word, and a small typo ("sever hop")
+-- Results are sorted by how well they match. Click a result (or press Enter for the first one, Up / Down to choose,
+-- Escape to clear): the menu opens the right tab, scrolls to the function and makes it flash.
+-- Opening tabs is done here, by repeating what the first module does when a tab button is clicked (right, top and side
+-- tabs); the real buttons are pressed with the executor's firesignal / getconnections only if that fails.
+safe("Search", function()
+    local window = screenGui:FindFirstChild("MenuWindow")
+    if not window then return end
+    local RunService = game:GetService("RunService")
+    local MAX_RESULTS = 8
+
+    -- the frame of the box goes under the tab bar of the right-hand panel (the first module leaves that strip free)
+    local frame
+    local rightPane = window:FindFirstChild("RightPane", true)
+    local rightTop
+    for _, c in ipairs(rightPane and rightPane:GetChildren() or {}) do
+        if c:IsA("Frame") and c:FindFirstChildWhichIsA("ScrollingFrame") then rightTop = c; break end
+    end
+    if not rightTop then warn("[Dyser] Search: the right-hand panel was not found."); return end
+    -- an older first module may still have its own box there: it is hidden and replaced by this one
+    for _, d in ipairs(rightTop:GetDescendants()) do
+        if d:IsA("TextBox") and d.PlaceholderText == "Search elements..." then
+            frame = d.Parent
+            d.Visible = false
+            for _, c in ipairs(frame:GetChildren()) do
+                if c:IsA("TextButton") then c.Visible = false end
+            end
+            break
+        end
+    end
+    if not frame then
+        frame = Instance.new("Frame", rightTop)
+        frame.Position = UDim2.fromOffset(5, 29); frame.Size = UDim2.new(1, -10, 0, 22)
+        frame.BackgroundColor3 = Color3.fromRGB(8, 8, 9); frame.BorderSizePixel = 0
+        corner(frame, 4); stroke(frame, COLORS.lineLight, 1, 0.15)
+        label(frame, "TextLabel", { Size = UDim2.fromOffset(22, 22), Text = "🔍", TextSize = 11,
+            TextXAlignment = Enum.TextXAlignment.Center, Category = "Labels" })
+    end
+
+    -- ---------- text helpers ----------
+    local function norm(s) return (tostring(s):lower():gsub("%p", " ")) end
+    local function tokens(s)
+        local t = {}
+        for w in norm(s):gmatch("%S+") do t[#t + 1] = w end
+        return t
+    end
+    local function lev(a, b)   -- the number of single-letter edits between two words
+        local la, lb = #a, #b
+        if math.abs(la - lb) > 2 then return 3 end
+        local prev = {}
+        for j = 0, lb do prev[j] = j end
+        for i = 1, la do
+            local cur = { [0] = i }
+            for j = 1, lb do
+                local cost = (a:byte(i) == b:byte(j)) and 0 or 1
+                cur[j] = math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost)
+            end
+            prev = cur
+        end
+        return prev[lb]
+    end
+    local function wordScore(q, list, fuzzy)   -- how well one typed word matches the best word of a list
+        local best = 0
+        for _, t in ipairs(list) do
+            local s = 0
+            if t == q then s = 100
+            elseif t:sub(1, #q) == q then s = 80
+            elseif #q >= 2 and t:find(q, 1, true) then s = 50
+            elseif fuzzy and #q >= 4 and lev(q, t) <= 1 then s = 40
+            elseif fuzzy and #q >= 4 and #t > #q and lev(q, t:sub(1, #q)) <= 1 then s = 30 end
+            if s > best then best = s end
+        end
+        return best
+    end
+
+    local function nameOf(row)
+        local l = row:FindFirstChild("Label")
+        if l and l:IsA("TextLabel") and l.Text ~= "" then return l.Text end
+        for _, d in ipairs(row:GetDescendants()) do
+            if d:IsA("TextLabel") and d.Text ~= "" then return d.Text end
+        end
+    end
+
+    -- ---------- the index: everything that is in the menu right now ----------
+    local function buildIndex()
+        local list = {}
+        local function add(e)
+            e.nameN = norm(e.name)
+            e.nameT = tokens(e.name)
+            e.extraT = tokens(e.extra or "")
+            e.locT = tokens(e.loc)
+            e.hintT = tokens((Nav.getHint and Nav.getHint(e.name)) or "")
+            list[#list + 1] = e
+        end
+        local function topButton(name)
+            for _, e in ipairs(Nav.topTabBtns) do if e.name == name then return e.button end end
+        end
+        local function sideButton(top, sideName)
+            local panel = window:FindFirstChild(top .. "_SidePanel", true)
+            for _, b in ipairs(panel and panel:GetChildren() or {}) do
+                local t = b:IsA("TextButton") and b:FindFirstChildWhichIsA("TextLabel")
+                if t and t.Text == sideName then return b end
+            end
+        end
+        local function rightButton(name)
+            for _, e in ipairs(Nav.rightTabBtns) do if e.name == name then return e.button end end
+        end
+
+        -- tabs
+        for _, e in ipairs(Nav.topTabBtns) do
+            add({ name = e.name, loc = "Top tab", kind = "tab", dest = { kind = "top", button = e.button, name = e.name } })
+        end
+        for _, e in ipairs(Nav.rightTabBtns) do
+            add({ name = e.name, loc = "Right tab", kind = "tab", dest = { kind = "right", button = e.button, name = e.name } })
+        end
+        for _, d in ipairs(window:GetDescendants()) do
+            if d:IsA("ScrollingFrame") and d.Name:sub(-10) == "_SidePanel" then
+                local top = d.Name:sub(1, -11)
+                for _, b in ipairs(d:GetChildren()) do
+                    local t = b:IsA("TextButton") and b:FindFirstChildWhichIsA("TextLabel")
+                    if t then add({ name = t.Text, loc = top, kind = "tab", dest = { kind = "side", top = topButton(top), side = b, topName = top, sideName = t.Text } }) end
+                end
+            end
+        end
+
+        -- functions, sections and info lines of every page
+        for _, page in ipairs(window:GetDescendants()) do
+            if page:IsA("ScrollingFrame") and page.Name:sub(-4) == "Page" and page.Name ~= "HistoryPage" then
+                local loc, dest
+                if page.Parent and page.Parent.Name:sub(-9) == "_LeftPane" then
+                    local top, side = page.Parent.Name:sub(1, -10), page.Name:sub(1, -5)
+                    loc = top .. " ▸ " .. side
+                    dest = { kind = "side", top = topButton(top), side = sideButton(top, side), topName = top, sideName = side }
+                elseif page.Parent and page.Parent.Name == "RightPane" then
+                    local name = page.Name:sub(1, -5)
+                    loc = name
+                    dest = { kind = "right", button = rightButton(name), name = name }
+                end
+                if loc and dest then
+                    local isInfo = page.Name == "InfoPage"
+                    for _, row in ipairs(page:GetChildren()) do
+                        local name = row:IsA("Frame") and nameOf(row)
+                        if name then
+                            local extra = {}
+                            for _, d in ipairs(row:GetDescendants()) do
+                                if d:IsA("TextLabel") and d.Text ~= "" and d.Text ~= name and d.AnchorPoint.X ~= 1
+                                    and not tonumber(d.Text) and #extra < 5 then
+                                    extra[#extra + 1] = d.Text
+                                end
+                            end
+                            add({ name = name, extra = table.concat(extra, " "), loc = loc,
+                                kind = isInfo and "info" or (row.Active and "function" or "section"),
+                                row = row, page = page, dest = dest })
+                        end
+                    end
+                end
+            end
+        end
+        return list
+    end
+
+    local cache, cacheTime = nil, 0
+    local function index()
+        if not cache or os.clock() - cacheTime > 1 then cache, cacheTime = buildIndex(), os.clock() end
+        return cache
+    end
+
+    local function search(query)
+        local q = norm(query):match("^%s*(.-)%s*$")
+        local words = tokens(q)
+        if #words == 0 then return {} end
+        local found = {}
+        for _, e in ipairs(index()) do
+            local total = 0
+            for _, w in ipairs(words) do
+                local s = math.max(3 * wordScore(w, e.nameT, true), 2 * wordScore(w, e.extraT, true),
+                    1.5 * wordScore(w, e.locT, true), 1 * wordScore(w, e.hintT, false))
+                if s == 0 then total = 0; break end
+                total = total + s
+            end
+            if total > 0 then
+                if e.nameN:match("^%s*(.-)%s*$") == q then total = total + 300
+                elseif e.nameN:sub(1, #q) == q then total = total + 120 end
+                if e.kind == "function" then total = total + 5 end
+                found[#found + 1] = { e = e, score = total }
+            end
+        end
+        table.sort(found, function(a, b)
+            if a.score ~= b.score then return a.score > b.score end
+            return a.e.name < b.e.name
+        end)
+        local out = {}
+        for i = 1, math.min(#found, MAX_RESULTS) do out[i] = found[i].e end
+        return out, #found
+    end
+
+    -- ---------- going to a result ----------
+    local function press(btn)   -- presses a real button of the menu, so the library does all the switching itself
+        if not btn then return false end
+        if typeof(firesignal) == "function" and pcall(firesignal, btn.MouseButton1Click) then return true end
+        if typeof(getconnections) == "function" then
+            local ok = pcall(function()
+                for _, c in ipairs(getconnections(btn.MouseButton1Click)) do c:Fire() end
+            end)
+            if ok then return true end
+        end
+        return false
+    end
+
+    local function flash(row)
+        local f = Instance.new("Frame")
+        f.Name = "DyserFlash"; f.Size = UDim2.new(1, 0, 1, 0); f.BorderSizePixel = 0; f.Active = false; f.ZIndex = 80
+        f.BackgroundColor3 = COLORS.accent; f.BackgroundTransparency = 0.5
+        corner(f, 4)
+        local outline = stroke(f, COLORS.accent, 2, 0)
+        f.Parent = row
+        local info = TweenInfo.new(2.4, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+        TweenService:Create(f, info, { BackgroundTransparency = 1 }):Play()
+        local t = TweenService:Create(outline, info, { Transparency = 1 })
+        t.Completed:Connect(function() f:Destroy() end)
+        t:Play()
+    end
+
+    local function reveal(e)   -- show the row (open its section if it is closed) and scroll the page to it
+        local row, page = e.row, e.page
+        if not row.Visible then
+            local ordered = {}
+            for i, c in ipairs(page:GetChildren()) do
+                if c:IsA("GuiObject") then ordered[#ordered + 1] = { obj = c, idx = i } end
+            end
+            table.sort(ordered, function(a, b)
+                if a.obj.LayoutOrder ~= b.obj.LayoutOrder then return a.obj.LayoutOrder < b.obj.LayoutOrder end
+                return a.idx < b.idx
+            end)
+            local at
+            for i, o in ipairs(ordered) do if o.obj == row then at = i; break end end
+            for i = (at or 1) - 1, 1, -1 do   -- the closest section header above it: open it if it is collapsed
+                local header = ordered[i].obj
+                if header:GetAttribute("DyserSection") then
+                    if Nav.expandSection then Nav.expandSection(header, true) end
+                    break
+                end
+                local arrow = header:IsA("Frame") and header:FindFirstChildWhichIsA("TextButton")
+                if arrow and (arrow.Text == "^" or arrow.Text == ">") then   -- a section of an older setup: its own arrow
+                    if arrow.Text == ">" then press(arrow) end
+                    break
+                end
+            end
+            row.Visible = true
+        end
+        local scale = math.max(uiScale.Scale, 0.01)
+        local y = (row.AbsolutePosition.Y - page.AbsolutePosition.Y) / scale + page.CanvasPosition.Y
+        page.CanvasPosition = Vector2.new(0, math.max(0, y - 40))
+    end
+
+    -- Opening a tab: the same steps the first module runs when you click the tab button (its own functions are private, so
+    -- the steps are repeated here using the menu's parts and the shared Nav table).
+    local function selectRightTab(name)
+        local target
+        for _, e in ipairs(Nav.rightTabBtns) do if e.name == name then target = e end end
+        local page = target and Nav.rightTabPgs[name]
+        if not page then return false end
+        for _, e in ipairs(Nav.rightTabBtns) do
+            e.button.BackgroundColor3 = Color3.fromRGB(8, 8, 9)
+            if e.label then e.label.TextColor3 = COLORS.text end
+        end
+        Nav.selectedRight = target.button
+        target.button.BackgroundColor3 = COLORS.accent
+        if target.label then target.label.TextColor3 = COLORS.white end
+        for _, p in pairs(Nav.rightTabPgs) do p.Visible = false end
+        page.Visible = true
+        return true
+    end
+
+    local function selectTopTab(name)
+        local target
+        for _, e in ipairs(Nav.topTabBtns) do if e.name == name then target = e end end
+        local panel = window:FindFirstChild(name .. "_SidePanel", true)
+        local pane = window:FindFirstChild(name .. "_LeftPane", true)
+        if not (target and panel and pane) then return false end
+        -- hide the library's own panels and the panels of every other top tab, show this one's
+        local own = window:FindFirstChild("Side", true); if own then own.Visible = false end
+        local ownPane = window:FindFirstChild("LeftPane", true); if ownPane then ownPane.Visible = false end
+        for _, d in ipairs(window:GetDescendants()) do
+            if d:IsA("GuiObject") and (d.Name:sub(-10) == "_SidePanel" or d.Name:sub(-9) == "_LeftPane") then d.Visible = false end
+        end
+        panel.Visible = true; pane.Visible = true
+        for _, e in ipairs(Nav.topTabBtns) do
+            e.button.BackgroundColor3 = Color3.fromRGB(8, 8, 9)
+            if e.label then e.label.TextColor3 = COLORS.text end
+        end
+        Nav.selectedTop = target.button
+        target.button.BackgroundColor3 = COLORS.accent
+        if target.label then target.label.TextColor3 = COLORS.white end
+        if Nav.sideBottomBtn then Nav.sideBottomBtn.Visible = false end
+        return true
+    end
+
+    local hooked = setmetatable({}, { __mode = "k" })
+    local function selectSideTab(topName, sideName)
+        if not selectTopTab(topName) then return false end
+        local panel = window:FindFirstChild(topName .. "_SidePanel", true)
+        local pane = window:FindFirstChild(topName .. "_LeftPane", true)
+        local chosen
+        for _, b in ipairs(panel:GetChildren()) do
+            local t = b:IsA("TextButton") and b:FindFirstChildWhichIsA("TextLabel")
+            local page = t and pane:FindFirstChild(t.Text .. "Page")
+            if page then
+                local strokes = {}   -- the button has two outlines: the plain one, then the accent one for the selected state
+                for _, c in ipairs(b:GetChildren()) do if c:IsA("UIStroke") then strokes[#strokes + 1] = c end end
+                local active = strokes[2]
+                if t.Text == sideName then
+                    chosen = { button = b, page = page, label = t }
+                    TweenService:Create(b, TweenInfo.new(.15), { BackgroundColor3 = COLORS.accent }):Play()
+                    if active then TweenService:Create(active, TweenInfo.new(.15), { Transparency = 0 }):Play() end
+                else
+                    TweenService:Create(b, TweenInfo.new(.15), { BackgroundColor3 = Color3.fromRGB(17, 17, 18) }):Play()
+                    if active then TweenService:Create(active, TweenInfo.new(.15), { Transparency = 1 }):Play() end
+                    page.Visible = false
+                end
+            end
+        end
+        if not chosen then return false end
+        chosen.page.Visible = true
+        -- the library repaints a button dark when the mouse leaves it unless it knows the button is selected; it does not
+        -- know about this selection, so the selected look is put back a moment later
+        if not hooked[chosen.button] then
+            hooked[chosen.button] = true
+            chosen.button.MouseLeave:Connect(function()
+                task.delay(0.2, function()
+                    if chosen.page.Visible and chosen.button.Parent then
+                        chosen.button.BackgroundColor3 = COLORS.accent
+                        chosen.label.TextColor3 = COLORS.white
+                    end
+                end)
+            end)
+        end
+        return true
+    end
+
+    local function goTo(e)
+        task.spawn(function()
+            local d, ok = e.dest, false
+            if d.kind == "side" then ok = selectSideTab(d.topName, d.sideName)
+            elseif d.kind == "top" then ok = selectTopTab(d.name)
+            else ok = selectRightTab(d.name) end
+            if ok then playsfx("click") end
+            if not ok then   -- last resort: press the real buttons (needs the executor's firesignal / getconnections)
+                if d.kind == "side" then
+                    ok = true
+                    if Nav.selectedTop ~= d.top then ok = press(d.top) end
+                    ok = press(d.side) and ok
+                else
+                    ok = press(d.button)
+                end
+            end
+            if not ok then
+                AddLog('"' .. e.name .. '" is in ' .. e.loc .. " - open that tab to see it", COLORS.accent)
+                return
+            end
+            if e.row then
+                RunService.RenderStepped:Wait(); RunService.RenderStepped:Wait()   -- let the page lay itself out
+                pcall(reveal, e)
+                flash(e.row)
+            end
+        end)
+    end
+
+    -- ---------- the box and the list of results ----------
+    local box = label(frame, "TextBox", { Size = UDim2.new(1, -46, 1, 0), Position = UDim2.fromOffset(22, 0),
+        Text = "", TextSize = 12, Font = Enum.Font.Code, ClearTextOnFocus = false, Category = "Inputs" })
+    box.PlaceholderText = "Search anything..."; box.PlaceholderColor3 = COLORS.muted
+    bindCursorHover(box)
+    local clear = label(frame, "TextButton", { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -3, 0.5, 0),
+        Size = UDim2.fromOffset(20, 18), BackgroundTransparency = 0, BackgroundColor3 = Color3.fromRGB(20, 20, 22),
+        Text = "X", TextSize = 11, TextColor3 = COLORS.muted, Font = FONTS.bold, AutoButtonColor = false, Category = "Buttons" })
+    corner(clear, 3); stroke(clear, COLORS.line, 1, 0.2); bindCursorHover(clear)
+    clear.Visible = false
+
+    local panel = Instance.new("Frame")
+    panel.Name = "DyserSearchResults"; panel.Visible = false; panel.ZIndex = 200; panel.Active = true
+    panel.AutomaticSize = Enum.AutomaticSize.Y; panel.Size = UDim2.fromOffset(200, 0)
+    panel.BackgroundColor3 = Color3.fromRGB(10, 10, 13); panel.BorderSizePixel = 0
+    corner(panel, 4); Track.Stroke(stroke(panel, COLORS.accent, 1, 0.3))
+    local list = Instance.new("UIListLayout", panel); list.SortOrder = Enum.SortOrder.LayoutOrder
+    local panelPad = Instance.new("UIPadding", panel)
+    panelPad.PaddingTop = UDim.new(0, 3); panelPad.PaddingBottom = UDim.new(0, 3)
+    panel.Parent = window
+
+    local results, selected, overPanel, lastTotal = {}, 1, false, 0
+    panel.MouseEnter:Connect(function() overPanel = true end)
+    panel.MouseLeave:Connect(function() overPanel = false end)
+
+    local function closeResults() panel.Visible = false; overPanel = false end
+
+    local function place()
+        local scale = math.max(uiScale.Scale, 0.01)
+        local p = (frame.AbsolutePosition - window.AbsolutePosition) / scale
+        local s = frame.AbsoluteSize / scale
+        panel.Position = UDim2.fromOffset(p.X, p.Y + s.Y + 3)
+        panel.Size = UDim2.fromOffset(s.X, 0)
+    end
+
+    local function render(total)
+        for _, c in ipairs(panel:GetChildren()) do
+            if c:IsA("GuiObject") then c:Destroy() end
+        end
+        if box.Text:match("^%s*$") then closeResults(); return end
+        place(); panel.Visible = true
+        if #results == 0 then
+            local none = Instance.new("TextLabel", panel)
+            none.Size = UDim2.new(1, 0, 0, 26); none.BackgroundTransparency = 1; none.ZIndex = 201
+            none.Text = "  Nothing found"; none.TextColor3 = COLORS.muted; none.Font = Enum.Font.Code; none.TextSize = 12
+            none.TextXAlignment = Enum.TextXAlignment.Left
+            return
+        end
+        for i, e in ipairs(results) do
+            local b = Instance.new("TextButton", panel)
+            b.LayoutOrder = i; b.Size = UDim2.new(1, 0, 0, 26); b.BorderSizePixel = 0; b.Text = ""; b.AutoButtonColor = false
+            b.BackgroundColor3 = COLORS.accent; b.BackgroundTransparency = (i == selected) and 0.75 or 1; b.ZIndex = 201
+            local n = Instance.new("TextLabel", b)
+            n.Position = UDim2.fromOffset(8, 0); n.Size = UDim2.new(0.55, -8, 1, 0); n.BackgroundTransparency = 1; n.ZIndex = 202
+            n.Text = e.name; n.TextColor3 = COLORS.text; n.Font = FONTS.bold; n.TextSize = 12
+            n.TextXAlignment = Enum.TextXAlignment.Left; n.TextTruncate = Enum.TextTruncate.AtEnd
+            local w = Instance.new("TextLabel", b)
+            w.AnchorPoint = Vector2.new(1, 0); w.Position = UDim2.new(1, -8, 0, 0); w.Size = UDim2.new(0.45, -8, 1, 0)
+            w.BackgroundTransparency = 1; w.ZIndex = 202
+            w.Text = e.loc .. "  ·  " .. e.kind; w.TextColor3 = COLORS.muted; w.Font = Enum.Font.Code; w.TextSize = 10
+            w.TextXAlignment = Enum.TextXAlignment.Right; w.TextTruncate = Enum.TextTruncate.AtEnd
+            b.MouseEnter:Connect(function() selected = i; for j, s in ipairs(panel:GetChildren()) do
+                if s:IsA("TextButton") then s.BackgroundTransparency = (s.LayoutOrder == i) and 0.75 or 1 end end end)
+            b.MouseButton1Click:Connect(function()
+                playsfx("click"); closeResults(); box:ReleaseFocus(); goTo(e)
+            end)
+        end
+        if total and total > #results then
+            local more = Instance.new("TextLabel", panel)
+            more.LayoutOrder = 99; more.Size = UDim2.new(1, 0, 0, 18); more.BackgroundTransparency = 1; more.ZIndex = 201
+            more.Text = string.format("  + %d more - type more to narrow it down", total - #results)
+            more.TextColor3 = COLORS.muted; more.Font = Enum.Font.Code; more.TextSize = 10
+            more.TextXAlignment = Enum.TextXAlignment.Left
+        end
+    end
+
+    local function refresh()
+        clear.Visible = box.Text ~= ""
+        local total
+        results, total = search(box.Text)
+        lastTotal = total or 0
+        selected = 1
+        render(lastTotal)
+    end
+    box:GetPropertyChangedSignal("Text"):Connect(refresh)
+    box.Focused:Connect(function() cache = nil; if box.Text ~= "" then refresh() end end)   -- rebuild the index: the menu may have changed
+    box.FocusLost:Connect(function(enter)
+        if enter and results[selected] then
+            playsfx("click"); local e = results[selected]; closeResults(); goTo(e)
+            return
+        end
+        task.delay(0.25, function()   -- a moment to let a click on a result go through
+            if not box:IsFocused() and not overPanel then closeResults() end
+        end)
+    end)
+    clear.MouseButton1Click:Connect(function() playsfx("click"); box.Text = ""; closeResults() end)
+
+    UserInputService.InputBegan:Connect(function(input)
+        if not box:IsFocused() or not panel.Visible then return end
+        if input.KeyCode == Enum.KeyCode.Down and #results > 0 then selected = math.min(#results, selected + 1); render(lastTotal)
+        elseif input.KeyCode == Enum.KeyCode.Up and #results > 0 then selected = math.max(1, selected - 1); render(lastTotal)
+        elseif input.KeyCode == Enum.KeyCode.Escape then box.Text = ""; box:ReleaseFocus() end
+    end)
+    screenGui:GetPropertyChangedSignal("Enabled"):Connect(function() if not screenGui.Enabled then closeResults() end end)
+    window:GetPropertyChangedSignal("Visible"):Connect(function() if not window.Visible then closeResults() end end)
+end)
+
+-- ── 8. For the third module ────────────────────────────────────────────
+-- Nav.refresh() makes tabs and functions that were created AFTER this file ran draggable / movable and gives them hints.
+-- (Sliders, buttons, key binds, section arrows, dropdown arrows and the search follow new things by themselves.)
+-- Also: Nav.setHint("Name", "text") adds a hint, Nav.buttonInfo["Button text"] = "what it does" adds the text left of a button.
+Nav.refresh = function()
+    if Nav.scanTabs then Nav.scanTabs() end
+    if Nav.scanRows then Nav.scanRows() end
+    if Nav.applyHints then Nav.applyHints() end
+end
+return { Dyser = Dyser, Window = Window, UI = UI, Nav = Nav, refresh = Nav.refresh }
