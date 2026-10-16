@@ -1,7 +1,7 @@
 -- ===================== DYSER LOADER (second module) =====================
 -- Loads the menu from a link and adds the right-hand tabs and all the extras to it.
 -- The library itself (the first module) is hosted on GitHub. The third module loads THIS file and builds the left tabs.
---   * (the left tabs Main / Misc are in the third module, which loads this one)
+--   * (the left tabs Main / Misc and the player window are in the third module, which loads this one)
 --   * Info        = the right-hand Info tab (player, game and device information)
 --   * Settings    = the right-hand Settings tab (hotkey, menu size, off-screen drag, rejoin, stats window, HINTS on/off, sound)
 --   * History     = the right-hand History tab (every action the menu records, with revert buttons)
@@ -81,6 +81,21 @@ local function safe(name, fn)
     local ok, err = pcall(fn)
     if not ok then warn("[Dyser] " .. name .. " failed: " .. tostring(err)) end
 end
+
+-- ── Title bar: no minimize button ──────────────────────────────────────
+-- The small "-" button next to the close button is removed. (The menu can still be closed with the x or its hotkey.)
+safe("Remove minimize button", function()
+    local window = screenGui:FindFirstChild("MenuWindow")
+    if not window then return end
+    for _, d in ipairs(window:GetDescendants()) do
+        if d:IsA("TextButton") and (d.Text == "-" or d.Text == "□") and d.AnchorPoint == Vector2.new(1, 0)
+            and d.Size.X.Scale == 0 and d.Size.X.Offset == d.Size.Y.Offset and d.Size.X.Offset <= 30
+            and d.Position.Y.Scale == 0 and d.Position.Y.Offset <= 10 then
+            d:Destroy()
+            break
+        end
+    end
+end)
 
 -- ── Hint system ────────────────────────────────────────────────────────
 -- A small box that appears when the mouse rests on a tab or function for a moment. It is built here (instead of using
@@ -339,6 +354,7 @@ end)
 -- (Nav.setMenuSize, Nav.rejoin, Nav.setStats, the sound system); this tab only gives you the controls for them.
 safe("Settings tab", function()
     local Settings = Window:AddRightTab("Settings", { Order = 20 })
+    Nav.settingsTab = Settings   -- the third module adds its own controls to this tab
     local page = Settings:GetPage()
     local HttpService = game:GetService("HttpService")
     local TeleportService = game:GetService("TeleportService")
@@ -2065,7 +2081,8 @@ end)
 -- ── 8. For the third module ────────────────────────────────────────────
 -- Nav.refresh() makes tabs and functions that were created AFTER this file ran draggable / movable and gives them hints.
 -- (Sliders, buttons, key binds, section arrows, dropdown arrows and the search follow new things by themselves.)
--- Also: Nav.setHint("Name", "text") adds a hint, Nav.buttonInfo["Button text"] = "what it does" adds the text left of a button.
+-- Also: Nav.setHint("Name", "text") adds a hint, Nav.buttonInfo["Button text"] = "what it does" adds the text left of a button,
+-- Nav.settingsTab is the Settings tab (Nav.settingsTab:AddSection / AddToggle / ... adds controls to it).
 Nav.refresh = function()
     if Nav.scanTabs then Nav.scanTabs() end
     if Nav.scanRows then Nav.scanRows() end
