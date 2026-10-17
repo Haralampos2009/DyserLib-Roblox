@@ -1125,6 +1125,8 @@ end)
 --   * a FUNCTION (from a left tab or a right tab): hold Left Shift, drag it onto this tab's button and let go
 --   * a whole TAB (a side tab like "Visuals" or a top tab like "Misc"): drag its button onto this tab's button and let go.
 --     All its functions move here under a banner and the tab button disappears
+-- Dragging is not needed: the two rows at the top of the tab ("Put a function away" / "Put a tab away") open a list of
+-- EVERYTHING in the menu (all left and right tabs); type to filter it and click what you want to put away.
 -- To take things out: drag a function onto any other tab, or press "Restore" on a tab's banner (everything goes back to
 -- where it was and the tab comes back). Functions keep working while they are here, and the search still finds them.
 safe("Trash tab", function()
@@ -1136,8 +1138,9 @@ safe("Trash tab", function()
     note.Name = "TrashNote"; note.Size = UDim2.new(1, 0, 0, 0); note.AutomaticSize = Enum.AutomaticSize.Y
     note.BackgroundTransparency = 1; note.TextWrapped = true; note.TextXAlignment = Enum.TextXAlignment.Left
     note.TextYAlignment = Enum.TextYAlignment.Top; note.Font = FONTS.default; note.TextSize = 12; note.TextColor3 = COLORS.muted
-    note.Text = "Hold Left Shift, drag a function onto the Trash tab and let go. To put a whole tab away, drag the tab's "
-        .. "button onto the Trash tab. To take something out, drag a function onto any other tab, or press Restore on a tab's banner."
+    note.Text = "Use the two rows below to pick what to put away: any function or any tab of the whole menu. You can also hold "
+        .. "Left Shift and drag a function (or drag a tab's button) onto the Trash tab. To take something out, drag a function "
+        .. "onto any other tab, or press Restore on a tab's banner."
     local notePad = Instance.new("UIPadding", note)
     notePad.PaddingLeft = UDim.new(0, 4); notePad.PaddingRight = UDim.new(0, 4); notePad.PaddingTop = UDim.new(0, 2); notePad.PaddingBottom = UDim.new(0, 4)
 
@@ -1206,6 +1209,194 @@ safe("Trash tab", function()
         end)
         AddLog('Put "' .. title .. '" in the Trash', COLORS.accent)
     end
+
+    -- ---------- the pick lists: put a function or a tab away without dragging ----------
+    local function nameOf(row)
+        local l = row:FindFirstChild("Label")
+        if l and l:IsA("TextLabel") and l.Text ~= "" then return l.Text end
+        for _, d in ipairs(row:GetDescendants()) do
+            if d:IsA("TextLabel") and d.Text ~= "" then return d.Text end
+        end
+    end
+
+    -- one function goes to the end of the Trash tab; the History entry puts it back
+    local function sendRow(row)
+        local from = row.Parent
+        if not from or from == page then return end
+        local oldOrder = row.LayoutOrder
+        normalizePage(from); normalizePage(page)
+        local function put(toPage, order)
+            row.LayoutOrder = order; row.Parent = toPage
+            if Nav.setRowPage then Nav.setRowPage(row, toPage) end
+        end
+        oldOrder = row.LayoutOrder
+        put(page, #sortedChildren(page) + 1)
+        local name = nameOf(row) or "function"
+        AddLog('Put "' .. name .. '" in the Trash', COLORS.accent)
+        pcall(function()
+            Dyser:AddHistory("↔ " .. name .. " → Trash", COLORS.text, function() put(from, oldOrder) end)
+        end)
+    end
+    Nav.trashFunction = sendRow
+
+    local function locationOf(pg)
+        if pg.Parent and pg.Parent.Name:sub(-9) == "_LeftPane" then return pg.Parent.Name:sub(1, -10) .. " ▸ " .. pg.Name:sub(1, -5) end
+        if pg.Parent and pg.Parent.Name == "RightPane" then return pg.Name:sub(1, -5) end
+    end
+
+    local function functionItems()   -- every function of the menu that is not in the Trash yet
+        if Nav.scanRows then Nav.scanRows() end
+        local items = {}
+        for _, pg in ipairs(window:GetDescendants()) do
+            if pg:IsA("ScrollingFrame") and pg.Name:sub(-4) == "Page" and pg ~= page and pg.Name ~= "InfoPage" and pg.Name ~= "HistoryPage" then
+                local loc = locationOf(pg)
+                if loc then
+                    for _, row in ipairs(pg:GetChildren()) do
+                        if row:IsA("Frame") and row.Active then
+                            local name = nameOf(row)
+                            if name then items[#items + 1] = { text = name, sub = loc, row = row } end
+                        end
+                    end
+                end
+            end
+        end
+        table.sort(items, function(a, b)
+            if a.sub ~= b.sub then return a.sub < b.sub end
+            return a.text < b.text
+        end)
+        return items
+    end
+
+    local function tabItems()   -- every top tab and side tab that is on the bar
+        local items = {}
+        for _, e in ipairs(Nav.topTabBtns) do
+            if e.button.Visible then items[#items + 1] = { text = e.name, sub = "top tab (all its tabs)", button = e.button, kind = "top" } end
+        end
+        for _, d in ipairs(window:GetDescendants()) do
+            if d:IsA("ScrollingFrame") and d.Name:sub(-10) == "_SidePanel" then
+                for _, b in ipairs(d:GetChildren()) do
+                    local l = b:IsA("TextButton") and b.Visible and b:FindFirstChildWhichIsA("TextLabel")
+                    if l then items[#items + 1] = { text = l.Text, sub = "tab of " .. d.Name:sub(1, -11), button = b, kind = "side" } end
+                end
+            end
+        end
+        return items
+    end
+
+    -- the list: a filter box and the things to pick from; it closes when you pick, press Escape or click away
+    local RunService = game:GetService("RunService")
+    local popup, popupOwner, overPopup, watcher
+    local function closePicker()
+        if popup then popup:Destroy(); popup = nil end
+        if watcher then watcher:Disconnect(); watcher = nil end
+        popupOwner, overPopup = nil, false
+    end
+    local function openPicker(anchor, items, onPick)
+        closePicker()
+        popupOwner = anchor
+        local scale = math.max(uiScale.Scale, 0.01)
+        local ap, as = (anchor.AbsolutePosition - window.AbsolutePosition) / scale, anchor.AbsoluteSize / scale
+        local width, height = math.max(250, as.X + 120), 260
+        local winSize = window.AbsoluteSize / scale
+        local y = ap.Y + as.Y + 3
+        if y + height > winSize.Y - 6 then y = math.max(6, ap.Y - height - 3) end   -- no room below: open it above
+        local x = math.max(6, math.min(ap.X + as.X - width, winSize.X - width - 6))
+
+        popup = Instance.new("Frame")
+        popup.Name = "DyserPicker"; popup.Active = true; popup.ZIndex = 260; popup.BorderSizePixel = 0
+        popup.Position = UDim2.fromOffset(x, y); popup.Size = UDim2.fromOffset(width, height)
+        popup.BackgroundColor3 = Color3.fromRGB(10, 10, 13)
+        corner(popup, 6); Track.Stroke(stroke(popup, COLORS.accent, 1, 0.3))
+        popup.MouseEnter:Connect(function() overPopup = true end)
+        popup.MouseLeave:Connect(function() overPopup = false end)
+
+        local filter = Instance.new("TextBox", popup)
+        filter.Position = UDim2.fromOffset(6, 6); filter.Size = UDim2.new(1, -12, 0, 24); filter.BorderSizePixel = 0
+        filter.BackgroundColor3 = Color3.fromRGB(18, 18, 21); filter.ZIndex = 261; filter.ClearTextOnFocus = false
+        filter.Font = Enum.Font.Code; filter.TextSize = 12; filter.TextColor3 = COLORS.text; filter.Text = ""
+        filter.PlaceholderText = "Type to filter..."; filter.PlaceholderColor3 = COLORS.muted
+        filter.TextXAlignment = Enum.TextXAlignment.Left
+        corner(filter, 4)
+        local pad = Instance.new("UIPadding", filter); pad.PaddingLeft = UDim.new(0, 8)
+
+        local list = Instance.new("ScrollingFrame", popup)
+        list.Position = UDim2.fromOffset(6, 36); list.Size = UDim2.new(1, -12, 1, -42); list.BackgroundTransparency = 1
+        list.BorderSizePixel = 0; list.ScrollBarThickness = 3; list.ScrollBarImageColor3 = COLORS.accent; list.ZIndex = 261
+        list.CanvasSize = UDim2.new(); list.AutomaticCanvasSize = Enum.AutomaticSize.Y
+        local layout = Instance.new("UIListLayout", list); layout.Padding = UDim.new(0, 2)
+
+        local function render()
+            for _, c in ipairs(list:GetChildren()) do if c:IsA("GuiObject") then c:Destroy() end end
+            local q = filter.Text:lower():match("^%s*(.-)%s*$")
+            local shown = 0
+            for _, item in ipairs(items) do
+                if q == "" or (item.text .. " " .. item.sub):lower():find(q, 1, true) then
+                    shown = shown + 1
+                    local b = Instance.new("TextButton", list)
+                    b.Size = UDim2.new(1, 0, 0, 24); b.BorderSizePixel = 0; b.AutoButtonColor = false; b.Text = ""; b.ZIndex = 262
+                    b.BackgroundColor3 = COLORS.accent; b.BackgroundTransparency = 1
+                    local n = Instance.new("TextLabel", b)
+                    n.Position = UDim2.fromOffset(6, 0); n.Size = UDim2.new(0.5, -6, 1, 0); n.BackgroundTransparency = 1; n.ZIndex = 263
+                    n.Font = FONTS.bold; n.TextSize = 12; n.TextColor3 = COLORS.text; n.TextXAlignment = Enum.TextXAlignment.Left
+                    n.TextTruncate = Enum.TextTruncate.AtEnd; n.Text = item.text
+                    local w = Instance.new("TextLabel", b)
+                    w.AnchorPoint = Vector2.new(1, 0); w.Position = UDim2.new(1, -6, 0, 0); w.Size = UDim2.new(0.5, -6, 1, 0)
+                    w.BackgroundTransparency = 1; w.ZIndex = 263; w.Font = Enum.Font.Code; w.TextSize = 10; w.TextColor3 = COLORS.muted
+                    w.TextXAlignment = Enum.TextXAlignment.Right; w.TextTruncate = Enum.TextTruncate.AtEnd; w.Text = item.sub
+                    b.MouseEnter:Connect(function() b.BackgroundTransparency = 0.75 end)
+                    b.MouseLeave:Connect(function() b.BackgroundTransparency = 1 end)
+                    b.MouseButton1Click:Connect(function()
+                        playsfx("click")
+                        closePicker()
+                        pcall(onPick, item)
+                    end)
+                end
+            end
+            if shown == 0 then
+                local none = Instance.new("TextLabel", list)
+                none.Size = UDim2.new(1, 0, 0, 24); none.BackgroundTransparency = 1; none.ZIndex = 262; none.Font = Enum.Font.Code
+                none.TextSize = 11; none.TextColor3 = COLORS.muted; none.Text = "  nothing to put away"; none.TextXAlignment = Enum.TextXAlignment.Left
+            end
+        end
+        filter:GetPropertyChangedSignal("Text"):Connect(render)
+        render()
+        popup.Parent = window
+        filter:CaptureFocus()
+
+        watcher = RunService.Heartbeat:Connect(function()   -- closes when the Trash tab or the menu is no longer on the screen
+            if not (page.Visible and window.Visible and screenGui.Enabled) then closePicker() end
+        end)
+    end
+    UserInputService.InputBegan:Connect(function(input)
+        if not popup then return end
+        if input.KeyCode == Enum.KeyCode.Escape then closePicker()
+        elseif input.UserInputType == Enum.UserInputType.MouseButton1 and not overPopup then
+            task.defer(function() if popup and not overPopup and popupOwner and not popupOwner:GetAttribute("Over") then closePicker() end end)
+        end
+    end)
+
+    local function addPickerRow(title, items, onPick)
+        local row = Instance.new("Frame", page)
+        row.Name = "TrashPicker"; row.Size = UDim2.new(1, 0, 0, 26); row.BorderSizePixel = 0
+        row.BackgroundColor3 = Color3.fromRGB(8, 8, 10); row.BackgroundTransparency = 0.1; corner(row, 4)
+        local text = Instance.new("TextLabel", row)
+        text.Position = UDim2.fromOffset(8, 0); text.Size = UDim2.new(1, -92, 1, 0); text.BackgroundTransparency = 1
+        text.Font = FONTS.default; text.TextSize = 12; text.TextColor3 = COLORS.text; text.TextXAlignment = Enum.TextXAlignment.Left
+        text.TextTruncate = Enum.TextTruncate.AtEnd; text.Text = title
+        local choose = Instance.new("TextButton", row)
+        choose.AnchorPoint = Vector2.new(1, 0.5); choose.Position = UDim2.new(1, -4, 0.5, 0); choose.Size = UDim2.fromOffset(80, 18)
+        choose.AutoButtonColor = false; choose.BorderSizePixel = 0; choose.Text = "Choose..."
+        choose.Font = FONTS.bold; choose.TextSize = 11; choose.TextColor3 = COLORS.white
+        corner(choose, 9); Track.BG(choose); bindCursorHover(choose)
+        choose.MouseEnter:Connect(function() choose:SetAttribute("Over", true) end)
+        choose.MouseLeave:Connect(function() choose:SetAttribute("Over", nil) end)
+        choose.MouseButton1Click:Connect(function()
+            playsfx("click")
+            if popupOwner == choose then closePicker() else openPicker(choose, items(), onPick) end
+        end)
+    end
+    addPickerRow("Put a function away", functionItems, function(item) sendRow(item.row) end)
+    addPickerRow("Put a tab away", tabItems, function(item) Nav.putTabInTrash(item.button, item.kind) end)
 
     -- kind = "side" (a side tab) or "top" (a top tab); called by the tab drag code when a tab is dropped on the Trash tab
     Nav.putTabInTrash = function(btn, kind)
@@ -1669,7 +1860,7 @@ safe("Hints", function()
     local HINTS = {
         -- tabs
         ["Info"] = "Information about you, your character, this game and server, and your device.",
-        ["Trash"] = "A place for functions and tabs you do not like: drag a function (hold Left Shift) or a tab button onto this tab to put it away.",
+        ["Trash"] = "A place for functions and tabs you do not like: pick them from the lists in this tab, or drag them onto it (functions with Left Shift held).",
         ["Settings"] = "Menu hotkey, size, window behavior, rejoin, server hop, stats window, hints, moving functions and sound.",
         ["History"] = "Everything you changed in the menu. Press Revert next to an entry to undo it.",
         ["Themes"] = "Colors, transparency, rainbow and text sizes of the menu.",
