@@ -1120,6 +1120,24 @@ safe("Smooth panels", function()
     end)
 end)
 
+-- ── Trash tab: where functions you do not like are kept ────────────────
+-- The last right-hand tab. A function you do not like can be put away here: hold Left Shift and drag it onto this tab's
+-- button (see "Move Functions" in Settings > Layout), and it is out of the way of your other tabs. Drag it back onto any
+-- other tab to take it out again. Functions keep working while they are here, and the search still finds them.
+safe("Trash tab", function()
+    local Trash = Window:AddRightTab("Trash", { Order = 100 })   -- 100 = after all the other right-hand tabs
+    local page = Trash:GetPage()
+    Trash:AddSection("Unwanted functions")
+    local note = Instance.new("TextLabel", page)   -- a plain label (not a function), so it cannot be dragged away
+    note.Name = "TrashNote"; note.Size = UDim2.new(1, 0, 0, 0); note.AutomaticSize = Enum.AutomaticSize.Y
+    note.BackgroundTransparency = 1; note.TextWrapped = true; note.TextXAlignment = Enum.TextXAlignment.Left
+    note.TextYAlignment = Enum.TextYAlignment.Top; note.Font = FONTS.default; note.TextSize = 12; note.TextColor3 = COLORS.muted
+    note.Text = "Functions you do not like go here. Hold Left Shift, drag a function onto the Trash tab and let go. "
+        .. "To take it out, drag it onto any other tab."
+    local notePad = Instance.new("UIPadding", note)
+    notePad.PaddingLeft = UDim.new(0, 4); notePad.PaddingRight = UDim.new(0, 4); notePad.PaddingTop = UDim.new(0, 2); notePad.PaddingBottom = UDim.new(0, 4)
+end)
+
 -- ── 4. Draggable tabs ──────────────────────────────────────────────────
 -- Press a tab and drag it along its bar to put it where you want: top tabs, side tabs and the right-hand tabs.
 -- A press without movement is still a normal click. Mouse only (on touch screens the bars scroll instead).
@@ -1497,6 +1515,7 @@ safe("Hints", function()
     local HINTS = {
         -- tabs
         ["Info"] = "Information about you, your character, this game and server, and your device.",
+        ["Trash"] = "A place for functions you do not like: hold Left Shift and drag a function onto this tab to put it away.",
         ["Settings"] = "Menu hotkey, size, window behavior, rejoin, server hop, stats window, hints, moving functions and sound.",
         ["History"] = "Everything you changed in the menu. Press Revert next to an entry to undo it.",
         ["Themes"] = "Colors, transparency, rainbow and text sizes of the menu.",
