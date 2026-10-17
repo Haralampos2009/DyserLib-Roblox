@@ -1120,11 +1120,15 @@ safe("Smooth panels", function()
     end)
 end)
 
--- ── Trash tab: where functions you do not like are kept ────────────────
--- The last right-hand tab. A function you do not like can be put away here: hold Left Shift and drag it onto this tab's
--- button (see "Move Functions" in Settings > Layout), and it is out of the way of your other tabs. Drag it back onto any
--- other tab to take it out again. Functions keep working while they are here, and the search still finds them.
+-- ── Trash tab: where functions and tabs you do not like are kept ───────
+-- The last right-hand tab. To put something away:
+--   * a FUNCTION (from a left tab or a right tab): hold Left Shift, drag it onto this tab's button and let go
+--   * a whole TAB (a side tab like "Visuals" or a top tab like "Misc"): drag its button onto this tab's button and let go.
+--     All its functions move here under a banner and the tab button disappears
+-- To take things out: drag a function onto any other tab, or press "Restore" on a tab's banner (everything goes back to
+-- where it was and the tab comes back). Functions keep working while they are here, and the search still finds them.
 safe("Trash tab", function()
+    local window = screenGui:FindFirstChild("MenuWindow")
     local Trash = Window:AddRightTab("Trash", { Order = 100 })   -- 100 = after all the other right-hand tabs
     local page = Trash:GetPage()
     Trash:AddSection("Unwanted functions")
@@ -1132,10 +1136,112 @@ safe("Trash tab", function()
     note.Name = "TrashNote"; note.Size = UDim2.new(1, 0, 0, 0); note.AutomaticSize = Enum.AutomaticSize.Y
     note.BackgroundTransparency = 1; note.TextWrapped = true; note.TextXAlignment = Enum.TextXAlignment.Left
     note.TextYAlignment = Enum.TextYAlignment.Top; note.Font = FONTS.default; note.TextSize = 12; note.TextColor3 = COLORS.muted
-    note.Text = "Functions you do not like go here. Hold Left Shift, drag a function onto the Trash tab and let go. "
-        .. "To take it out, drag it onto any other tab."
+    note.Text = "Hold Left Shift, drag a function onto the Trash tab and let go. To put a whole tab away, drag the tab's "
+        .. "button onto the Trash tab. To take something out, drag a function onto any other tab, or press Restore on a tab's banner."
     local notePad = Instance.new("UIPadding", note)
     notePad.PaddingLeft = UDim.new(0, 4); notePad.PaddingRight = UDim.new(0, 4); notePad.PaddingTop = UDim.new(0, 2); notePad.PaddingBottom = UDim.new(0, 4)
+
+    for _, e in ipairs(Nav.rightTabBtns) do   -- the drag code needs to know where this tab's button is
+        if e.name == "Trash" then Nav.trashButton = e.button end
+    end
+
+    local function sortedChildren(pg)   -- the things on a page in the order they are shown
+        local list = {}
+        for i, c in ipairs(pg:GetChildren()) do
+            if c:IsA("GuiObject") then list[#list + 1] = { obj = c, idx = i } end
+        end
+        table.sort(list, function(x, y)
+            if x.obj.LayoutOrder ~= y.obj.LayoutOrder then return x.obj.LayoutOrder < y.obj.LayoutOrder end
+            return x.idx < y.idx
+        end)
+        local out = {}
+        for _, e in ipairs(list) do out[#out + 1] = e.obj end
+        return out
+    end
+    local function normalizePage(pg) for i, c in ipairs(sortedChildren(pg)) do c.LayoutOrder = i end end
+
+    -- everything on the given pages goes to the Trash under a banner; the tab buttons are hidden; "Restore" undoes it
+    local function pack(title, pages, buttons)
+        local items = {}
+        for _, pg in ipairs(pages) do
+            normalizePage(pg)
+            for _, c in ipairs(sortedChildren(pg)) do items[#items + 1] = { obj = c, page = pg, order = c.LayoutOrder } end
+        end
+        normalizePage(page)
+        local last = #sortedChildren(page)
+
+        local banner = Instance.new("Frame", page)
+        banner.Name = "TrashBanner"; banner.LayoutOrder = last + 1; banner.Size = UDim2.new(1, 0, 0, 26)
+        banner.BackgroundColor3 = Color3.fromRGB(14, 14, 17); banner.BorderSizePixel = 0
+        corner(banner, 4); Track.Stroke(stroke(banner, COLORS.accent, 1, 0.55))
+        local text = Instance.new("TextLabel", banner)
+        text.Position = UDim2.fromOffset(8, 0); text.Size = UDim2.new(1, -86, 1, 0); text.BackgroundTransparency = 1
+        text.Font = FONTS.bold; text.TextSize = 12; text.TextColor3 = COLORS.text; text.TextXAlignment = Enum.TextXAlignment.Left
+        text.TextTruncate = Enum.TextTruncate.AtEnd; text.Text = title
+        local restore = Instance.new("TextButton", banner)
+        restore.AnchorPoint = Vector2.new(1, 0.5); restore.Position = UDim2.new(1, -4, 0.5, 0); restore.Size = UDim2.fromOffset(72, 18)
+        restore.AutoButtonColor = false; restore.BorderSizePixel = 0; restore.Text = "Restore"
+        restore.Font = FONTS.bold; restore.TextSize = 11; restore.TextColor3 = COLORS.white
+        corner(restore, 9); Track.BG(restore); bindCursorHover(restore)
+
+        for i, it in ipairs(items) do
+            it.obj.LayoutOrder = last + 1 + i
+            it.obj.Parent = page
+            if Nav.setRowPage then Nav.setRowPage(it.obj, page) end
+        end
+        for _, b in ipairs(buttons) do b.Visible = false end
+
+        restore.MouseButton1Click:Connect(function()
+            playsfx("click")
+            for _, it in ipairs(items) do
+                if it.obj.Parent == page then   -- things you already took out by hand stay where you put them
+                    it.obj.LayoutOrder = it.order
+                    it.obj.Parent = it.page
+                    if Nav.setRowPage then Nav.setRowPage(it.obj, it.page) end
+                end
+            end
+            for _, b in ipairs(buttons) do b.Visible = true end
+            banner:Destroy()
+            AddLog('Restored "' .. title .. '"', COLORS.accent)
+        end)
+        AddLog('Put "' .. title .. '" in the Trash', COLORS.accent)
+    end
+
+    -- kind = "side" (a side tab) or "top" (a top tab); called by the tab drag code when a tab is dropped on the Trash tab
+    Nav.putTabInTrash = function(btn, kind)
+        if kind == "side" then
+            local panel = btn.Parent
+            local top = panel.Name:sub(1, -11)
+            local label = btn:FindFirstChildWhichIsA("TextLabel")
+            local pane = window:FindFirstChild(top .. "_LeftPane", true)
+            local pg = label and pane and pane:FindFirstChild(label.Text .. "Page")
+            if not pg then return end
+            local wasOpen = pg.Visible
+            pack(label.Text .. "  ·  from " .. top, { pg }, { btn })
+            if wasOpen and Nav.selectSideTab then   -- open another tab of the same top tab instead
+                for _, b in ipairs(panel:GetChildren()) do
+                    local l2 = b:IsA("TextButton") and b.Visible and b ~= btn and b:FindFirstChildWhichIsA("TextLabel")
+                    if l2 then Nav.selectSideTab(top, l2.Text); break end
+                end
+            end
+        else
+            local name
+            for _, e in ipairs(Nav.topTabBtns) do if e.button == btn then name = e.name end end
+            local pane = name and window:FindFirstChild(name .. "_LeftPane", true)
+            if not pane then return end
+            local pages = {}
+            for _, c in ipairs(pane:GetChildren()) do
+                if c:IsA("ScrollingFrame") and c.Name:sub(-4) == "Page" then pages[#pages + 1] = c end
+            end
+            local wasOpen = Nav.selectedTop == btn
+            pack(name .. "  ·  the whole tab", pages, { btn })
+            if wasOpen and Nav.selectTopTab then   -- open another top tab instead
+                for _, e in ipairs(Nav.topTabBtns) do
+                    if e.button.Visible and e.button ~= btn then Nav.selectTopTab(e.name); break end
+                end
+            end
+        end
+    end
 end)
 
 -- ── 4. Draggable tabs ──────────────────────────────────────────────────
@@ -1160,6 +1266,15 @@ safe("Draggable tabs", function()
         return list
     end
 
+    local function isShown(obj)   -- the object and everything above it up to the window is visible
+        local o = obj
+        while o and o ~= window do
+            if o:IsA("GuiObject") and not o.Visible then return false end
+            o = o.Parent
+        end
+        return o == window and window.Visible
+    end
+
     local function attach(btn, axis)   -- axis: "X" for horizontal bars, "Y" for a vertical list
         if btn:GetAttribute("DyserTab") then return end   -- already draggable
         btn:SetAttribute("DyserTab", true)
@@ -1172,9 +1287,32 @@ safe("Draggable tabs", function()
             local startCenter = btn.AbsolutePosition + btn.AbsoluteSize / 2
             local startLocal = (btn.AbsolutePosition - window.AbsolutePosition) / scale   -- button position inside the window
             local oldTransparency = btn.BackgroundTransparency
-            local conn, ghost, moved
+            local conn, ghost, moved, mark, markOn
+
+            -- side tabs and top tabs can also be dropped on the Trash tab: the whole tab is put away there
+            local trashKind
+            if axis == "Y" and btn.Parent and btn.Parent.Name:sub(-10) == "_SidePanel" then trashKind = "side" end
+            for _, e in ipairs(Nav.topTabBtns) do if e.button == btn then trashKind = "top" end end
+
+            local function setMark(on)   -- outline the Trash tab while the tab is over it
+                if on == markOn then return end
+                markOn = on
+                if mark then mark:Destroy(); mark = nil end
+                if on and Nav.trashButton then
+                    mark = Instance.new("UIStroke"); mark.Name = "DyserDropMark"; mark.Color = COLORS.accent; mark.Thickness = 2
+                    mark.ApplyStrokeMode = Enum.ApplyStrokeMode.Border; mark.Parent = Nav.trashButton
+                end
+            end
+            local function overTrash()
+                local tb = Nav.trashButton
+                if not (trashKind and tb and tb.Parent and isShown(tb)) then return false end
+                local mp = UserInputService:GetMouseLocation() - Vector2.new(0, Nav.guiInset and Nav.guiInset() or 0)
+                local p, s = tb.AbsolutePosition, tb.AbsoluteSize
+                return mp.X >= p.X and mp.X <= p.X + s.X and mp.Y >= p.Y and mp.Y <= p.Y + s.Y
+            end
 
             local function finish()
+                setMark(false)
                 if conn then conn:Disconnect(); conn = nil end
                 if ghost then ghost:Destroy(); ghost = nil end
                 if moved then btn.BackgroundTransparency = oldTransparency end
@@ -1183,7 +1321,10 @@ safe("Draggable tabs", function()
 
             local function step()
                 if not btn.Parent or not window.Parent then finish(); return end
-                if not UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) then finish(); return end
+                if not UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) then
+                    if moved and overTrash() then pcall(Nav.putTabInTrash, btn, trashKind) end   -- let go over the Trash tab
+                    finish(); return
+                end
                 local delta = UserInputService:GetMouseLocation() - start
                 if not moved then
                     if delta.Magnitude < THRESHOLD then return end
@@ -1200,6 +1341,9 @@ safe("Draggable tabs", function()
                     btn.BackgroundTransparency = 0.65   -- the real tab is dimmed: it marks where the tab will land
                 end
                 ghost.Position = UDim2.fromOffset(startLocal.X + delta.X / scale, startLocal.Y + delta.Y / scale)
+
+                if overTrash() then setMark(true); return end   -- over the Trash tab: no reordering, the tab will go there
+                setMark(false)
 
                 -- the tab takes the slot under the center of the floating copy
                 local center = startCenter[axis] + delta[axis]
@@ -1373,6 +1517,7 @@ safe("Movable functions", function()
         local startLocal = (row.AbsolutePosition - window.AbsolutePosition) / scale
         local oldTransparency = row.BackgroundTransparency
         local conn, ghost, ghostText, moved, targets, dropTarget, mark, markTarget
+        local hovered, hoverConns = nil, {}   -- the tab button the mouse is over, as the buttons themselves report it
 
         local function setMark(t)   -- outline the tab the function would land on
             if t == markTarget then return end
@@ -1387,6 +1532,8 @@ safe("Movable functions", function()
 
         local function finish()
             setMark(nil)
+            for _, c in ipairs(hoverConns) do c:Disconnect() end
+            hoverConns = {}
             if conn then conn:Disconnect(); conn = nil end
             if ghost then ghost:Destroy(); ghost = nil end
             if moved then row.BackgroundTransparency = oldTransparency end
@@ -1404,6 +1551,10 @@ safe("Movable functions", function()
                 if delta.Magnitude < THRESHOLD then return end
                 moved, busy = true, true
                 targets = collectTargets()
+                for _, tg in ipairs(targets) do
+                    table.insert(hoverConns, tg.button.MouseEnter:Connect(function() hovered = tg end))
+                    table.insert(hoverConns, tg.button.MouseLeave:Connect(function() if hovered == tg then hovered = nil end end))
+                end
                 -- floating label that follows the mouse (a plain frame: copying the real row would copy its widgets)
                 ghost = Instance.new("Frame")
                 ghost.Size = UDim2.fromOffset(row.AbsoluteSize.X / scale, row.AbsoluteSize.Y / scale)
@@ -1417,7 +1568,7 @@ safe("Movable functions", function()
             end
             ghost.Position = UDim2.fromOffset(startLocal.X + delta.X / scale, startLocal.Y + delta.Y / scale)
 
-            dropTarget = targetAt(targets, entry.page)
+            dropTarget = (hovered and hovered.page ~= entry.page and shown(hovered.button)) and hovered or targetAt(targets, entry.page)
             setMark(dropTarget)
             if dropTarget then return end   -- over a tab: no reordering, the function will move there
 
@@ -1492,6 +1643,9 @@ safe("Movable functions", function()
         table.insert(movable, { row = row, page = page })
     end
     Nav.makeRowMovable = attachRow
+    Nav.setRowPage = function(row, page)   -- a function was moved by other code (the Trash tab): tell the drag code where it is
+        for _, m in ipairs(movable) do if m.row == row then m.page = page end end
+    end
 
     local function scanRows()   -- also called by Nav.refresh() after tabs were created later
         -- every function page ("<name>Page"): the right-hand tabs and the pages of your side tabs. Info and History are not lists of functions.
@@ -1515,7 +1669,7 @@ safe("Hints", function()
     local HINTS = {
         -- tabs
         ["Info"] = "Information about you, your character, this game and server, and your device.",
-        ["Trash"] = "A place for functions you do not like: hold Left Shift and drag a function onto this tab to put it away.",
+        ["Trash"] = "A place for functions and tabs you do not like: drag a function (hold Left Shift) or a tab button onto this tab to put it away.",
         ["Settings"] = "Menu hotkey, size, window behavior, rejoin, server hop, stats window, hints, moving functions and sound.",
         ["History"] = "Everything you changed in the menu. Press Revert next to an entry to undo it.",
         ["Themes"] = "Colors, transparency, rainbow and text sizes of the menu.",
@@ -1732,7 +1886,7 @@ safe("Search", function()
 
         -- tabs
         for _, e in ipairs(Nav.topTabBtns) do
-            add({ name = e.name, loc = "Top tab", kind = "tab", dest = { kind = "top", button = e.button, name = e.name } })
+            if e.button.Visible then add({ name = e.name, loc = "Top tab", kind = "tab", dest = { kind = "top", button = e.button, name = e.name } }) end
         end
         for _, e in ipairs(Nav.rightTabBtns) do
             add({ name = e.name, loc = "Right tab", kind = "tab", dest = { kind = "right", button = e.button, name = e.name } })
@@ -1742,7 +1896,7 @@ safe("Search", function()
                 local top = d.Name:sub(1, -11)
                 for _, b in ipairs(d:GetChildren()) do
                     local t = b:IsA("TextButton") and b:FindFirstChildWhichIsA("TextLabel")
-                    if t then add({ name = t.Text, loc = top, kind = "tab", dest = { kind = "side", top = topButton(top), side = b, topName = top, sideName = t.Text } }) end
+                    if t and b.Visible then add({ name = t.Text, loc = top, kind = "tab", dest = { kind = "side", top = topButton(top), side = b, topName = top, sideName = t.Text } }) end
                 end
             end
         end
@@ -1961,6 +2115,9 @@ safe("Search", function()
         end
         return true
     end
+
+    Nav.selectTopTab = selectTopTab     -- used by the Trash tab to open another tab when the open one is put away
+    Nav.selectSideTab = selectSideTab
 
     local function goTo(e)
         task.spawn(function()
