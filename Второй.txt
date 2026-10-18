@@ -14,6 +14,31 @@
 --   * Draggable tabs / movable functions / hints = at the very end: drag tabs along their bar, hold Left Shift and drag a
 --     function to move it, and rest the mouse on a tab or function to see what it does
 
+-- ── Quiet console and "generations" ────────────────────────────────────
+-- Nothing is written to the F9 console unless getgenv().DyserVerbose (or _G.DyserVerbose) is true: Settings > Console switches
+-- it, and you can set it to true before running the script to see what happens while the menu starts.
+-- Every start of this file raises the "generation". Listeners on the game's own services (keys, frames) disconnect
+-- themselves when a newer generation exists, so restarting the menu (the factory reset of the third module) leaves
+-- nothing running from the old menu.
+local rawPrint, rawWarn = print, warn
+local function verbose()
+    if rawget(_G, "DyserVerbose") then return true end
+    local ok, env = pcall(function() return getgenv and getgenv() end)
+    return (ok and env and env.DyserVerbose) == true
+end
+local function print(...) if verbose() then rawPrint(...) end end
+local function warn(...) if verbose() then rawWarn(...) end end
+_G.DyserGeneration = (rawget(_G, "DyserGeneration") or 0) + 1
+local generation = _G.DyserGeneration
+local function gconnect(signal, fn)
+    local connection
+    connection = signal:Connect(function(...)
+        if rawget(_G, "DyserGeneration") ~= generation then connection:Disconnect(); return end
+        return fn(...)
+    end)
+    return connection
+end
+
 -- The first module (the library) is loaded from GitHub. The file name in the link is URL-encoded: "First%20Models.txt"
 -- is the file "First Models.txt".
 local BASE = "https://raw.githubusercontent.com/Haralampos2009/DyserLib-Roblox/refs/heads/main/"
@@ -129,7 +154,7 @@ safe("Hint system", function()
         if y + size.Y > screen.Y - 4 then y = mp.Y - size.Y - 12 end   -- no room below: show it above the mouse
         box.Position = UDim2.fromOffset(math.max(4, x), math.max(4, y))
     end
-    RunService.RenderStepped:Connect(function()
+    gconnect(RunService.RenderStepped, function()
         if not box.Visible then return end
         local win = screenGui:FindFirstChild("MenuWindow")
         if not Nav.hintsEnabled or not win or not win.Visible then hide(); return end
@@ -147,7 +172,7 @@ safe("Hint system", function()
                 if mine ~= token or current ~= inst or not Nav.hintsEnabled then return end
                 local win = screenGui:FindFirstChild("MenuWindow")
                 if not win or not win.Visible then return end
-                box.Text = text
+                box.Text = Nav.tr and Nav.tr(text) or text   -- in the chosen language
                 box.TextSize = math.clamp(math.floor(12 * uiScale.Scale + 0.5), 11, 26)
                 box.Visible = true
                 place()
@@ -156,6 +181,276 @@ safe("Hint system", function()
         inst.MouseLeave:Connect(function() if current == inst then hide() end end)
     end
 end)
+
+-- ── Language ───────────────────────────────────────────────────────────
+-- English is the language of the menu. Settings > Language > Русский shows every text that has a translation in Russian:
+-- tab, section and function names, buttons, hints, notes. It works on the finished menu: a text object whose text is a known
+-- English text is switched to Russian (its English text is kept in the attribute "DyserEN"), and back when you choose English.
+-- Texts that are made up while the menu runs (numbers, names of players, log lines) stay as they are.
+-- Nav.textOf(label) is the English text of a label: the code that looks things up by name uses it, so a translated menu works
+-- exactly like the English one. Other modules add their own words with Nav.addTranslations({ ["English"] = "Русский" }).
+local TRANSLATIONS, REVERSE = {}, {}
+Nav.language = "en"
+local TEXT_CLASSES = { TextLabel = true, TextButton = true, TextBox = true }
+
+Nav.textOf = function(obj) return obj:GetAttribute("DyserEN") or obj.Text end
+Nav.en = function(text) return REVERSE[text] or text end
+Nav.tr = function(text) if Nav.language == "ru" then return TRANSLATIONS[text] or text end return text end
+
+local function translateObject(obj)   -- shows one text object in Russian when its text is a known English text
+    local en, text = obj:GetAttribute("DyserEN"), obj.Text
+    if en and TRANSLATIONS[en] == text then
+        -- already shown in Russian
+    elseif TRANSLATIONS[text] then
+        obj:SetAttribute("DyserEN", text); obj.Text = TRANSLATIONS[text]
+    elseif en then
+        obj:SetAttribute("DyserEN", nil)   -- the code wrote a new text meanwhile: the old English one is forgotten
+    end
+    if obj:IsA("TextBox") then   -- the grey hint text of a box
+        local enHolder, holder = obj:GetAttribute("DyserENPH"), obj.PlaceholderText
+        if enHolder and TRANSLATIONS[enHolder] == holder then
+        elseif TRANSLATIONS[holder] then obj:SetAttribute("DyserENPH", holder); obj.PlaceholderText = TRANSLATIONS[holder]
+        elseif enHolder then obj:SetAttribute("DyserENPH", nil) end
+    end
+end
+local function untranslateObject(obj)   -- back to English
+    local en = obj:GetAttribute("DyserEN")
+    if en then
+        if TRANSLATIONS[en] == obj.Text then obj.Text = en end
+        obj:SetAttribute("DyserEN", nil)
+    end
+    if obj:IsA("TextBox") then
+        local enHolder = obj:GetAttribute("DyserENPH")
+        if enHolder then
+            if TRANSLATIONS[enHolder] == obj.PlaceholderText then obj.PlaceholderText = enHolder end
+            obj:SetAttribute("DyserENPH", nil)
+        end
+    end
+end
+local function scanLanguage(toEnglish)
+    for _, d in ipairs(screenGui:GetDescendants()) do
+        if TEXT_CLASSES[d.ClassName] then
+            if toEnglish then untranslateObject(d) else translateObject(d) end
+        end
+    end
+end
+
+Nav.setLanguage = function(lang)
+    Nav.language = (lang == "ru") and "ru" or "en"
+    scanLanguage(Nav.language ~= "ru")
+end
+Nav.addTranslations = function(words)   -- the other modules call this with their own words
+    for en, ru in pairs(words) do TRANSLATIONS[en] = ru; REVERSE[ru] = en end
+    if Nav.language == "ru" then scanLanguage(false) end
+end
+
+task.spawn(function()   -- texts that the menu changes while it runs (the library rewrites some labels) are caught here
+    while screenGui.Parent do
+        task.wait(0.5)
+        if Nav.language == "ru" and screenGui.Enabled then pcall(scanLanguage, false) end
+    end
+end)
+screenGui.DescendantAdded:Connect(function(d)   -- things that appear later (lists, windows, notes)
+    if Nav.language == "ru" and TEXT_CLASSES[d.ClassName] then task.defer(translateObject, d) end
+end)
+
+Nav.addTranslations({
+    ["Info"] = "Инфо",
+    ["Settings"] = "Настройки",
+    ["History"] = "История",
+    ["Themes"] = "Темы",
+    ["Cursor"] = "Курсор",
+    ["Trash"] = "Корзина",
+    ["General"] = "Основное",
+    ["Main"] = "Главная",
+    ["Window"] = "Окно",
+    ["Server"] = "Сервер",
+    ["Layout"] = "Расположение",
+    ["Hints"] = "Подсказки",
+    ["Sound Feedback"] = "Звуки",
+    ["Player"] = "Игрок",
+    ["Character"] = "Персонаж",
+    ["Game"] = "Игра",
+    ["Device"] = "Устройство",
+    ["Preview"] = "Предпросмотр",
+    ["Colors"] = "Цвета",
+    ["Hotkeys"] = "Горячие клавиши",
+    ["Console"] = "Консоль",
+    ["Language"] = "Язык",
+    ["Unwanted functions"] = "Ненужные функции",
+    ["Palettes"] = "Палитры",
+    ["UI Styling"] = "Оформление интерфейса",
+    ["Element Scaling"] = "Масштаб элементов",
+    ["Tab Scaling"] = "Масштаб вкладок",
+    ["Stats"] = "Статистика",
+    ["Display Name"] = "Отображаемое имя",
+    ["Username"] = "Ник",
+    ["User ID"] = "ID игрока",
+    ["Account Created"] = "Аккаунт создан",
+    ["Account Age"] = "Возраст аккаунта",
+    ["Membership"] = "Подписка",
+    ["Team"] = "Команда",
+    ["Health"] = "Здоровье",
+    ["Walk Speed"] = "Скорость ходьбы",
+    ["Jump"] = "Прыжок",
+    ["Position"] = "Позиция",
+    ["Rig Type"] = "Тип модели",
+    ["Name"] = "Название",
+    ["Place ID"] = "ID места",
+    ["Universe ID"] = "ID вселенной",
+    ["Server (Job) ID"] = "ID сервера (Job)",
+    ["Creator"] = "Создатель",
+    ["Creator ID"] = "ID создателя",
+    ["Creator Type"] = "Тип создателя",
+    ["Place Version"] = "Версия места",
+    ["Created"] = "Создано",
+    ["Updated"] = "Обновлено",
+    ["Players"] = "Игроки",
+    ["Server Age"] = "Возраст сервера",
+    ["Private Server"] = "Приватный сервер",
+    ["Your Country"] = "Ваша страна",
+    ["Input"] = "Ввод",
+    ["Screen (px)"] = "Экран (px)",
+    ["Click to copy"] = "Нажмите, чтобы скопировать",
+    ["Yes"] = "Да",
+    ["No"] = "Нет",
+    ["None"] = "Нет",
+    ["Premium"] = "Премиум",
+    ["none"] = "нет",
+    ["loading..."] = "загрузка...",
+    ["not found"] = "не найдено",
+    ["none (Studio)"] = "нет (Studio)",
+    ["info unavailable (unpublished place?)"] = "информация недоступна (неопубликованное место?)",
+    ["Open / Close Menu"] = "Открыть / закрыть меню",
+    ["Menu Size"] = "Размер меню",
+    ["Menu Scale"] = "Масштаб меню",
+    ["Allow Off-Screen Drag"] = "Разрешить выход за экран",
+    ["Rejoin"] = "Перезайти",
+    ["Server Hop"] = "Сменить сервер",
+    ["Hop To"] = "Куда перейти",
+    ["Random server"] = "Случайный сервер",
+    ["Fewest players"] = "Меньше всего игроков",
+    ["Most players"] = "Больше всего игроков",
+    ["Stats Window"] = "Окно статистики",
+    ["Show Hints"] = "Показывать подсказки",
+    ["Move Functions"] = "Перемещение функций",
+    ["Sound Enabled"] = "Звук включён",
+    ["Volume"] = "Громкость",
+    ["Auto (x1)"] = "Авто (x1)",
+    ["Small (x0.75)"] = "Маленький (x0.75)",
+    ["Large (x1.25)"] = "Большой (x1.25)",
+    ["Extra Large (x1.5)"] = "Очень большой (x1.5)",
+    ["Huge (x1.75)"] = "Огромный (x1.75)",
+    ["Maximum (x2)"] = "Максимум (x2)",
+    ["Console Output (F9)"] = "Вывод в консоль (F9)",
+    ["Overlay"] = "Оверлей",
+    ["Accent Color (Buttons, etc.)"] = "Цвет акцента (кнопки и др.)",
+    ["Rainbow Accent (title, buttons, etc.)"] = "Радужный акцент (заголовок, кнопки и др.)",
+    ["Rainbow Speed"] = "Скорость радуги",
+    ["Rainbow"] = "Радуга",
+    ["Panel Color"] = "Цвет панели",
+    ["Panel2 Color"] = "Цвет панели 2",
+    ["Text Color (Global)"] = "Цвет текста (общий)",
+    ["Scrollbar Color"] = "Цвет полосы прокрутки",
+    ["Transparency"] = "Прозрачность",
+    ["Side Panel"] = "Боковая панель",
+    ["Window Background"] = "Фон окна",
+    ["Window BG"] = "Фон окна",
+    ["Bubble Theme"] = "Тема «пузыри»",
+    ["Solid Theme"] = "Тема «сплошная»",
+    ["Top Tabs Size"] = "Размер верхних вкладок",
+    ["Side Tabs Size"] = "Размер боковых вкладок",
+    ["Regular Buttons Size"] = "Размер обычных кнопок",
+    ["Copy / Save Buttons Size"] = "Размер кнопок копирования",
+    ["Input Fields Size"] = "Размер полей ввода",
+    ["Slider Text Size"] = "Размер текста слайдеров",
+    ["Palette Text Size"] = "Размер текста палитр",
+    ["Other Text Size"] = "Размер остального текста",
+    ["Enable Cursor"] = "Включить курсор",
+    ["Cursor Color"] = "Цвет курсора",
+    ["Cursor Rainbow Speed"] = "Скорость радуги курсора",
+    ["Spin"] = "Вращение",
+    ["Spin Speed"] = "Скорость вращения",
+    ["Ring Size"] = "Размер кольца",
+    ["Dot Size"] = "Размер точки",
+    ["Cross Size"] = "Размер креста",
+    ["Glow Size"] = "Размер свечения",
+    ["Glow Alpha"] = "Прозрачность свечения",
+    ["Ring Alpha"] = "Прозрачность кольца",
+    ["Put a function away"] = "Убрать функцию",
+    ["Put a tab away"] = "Убрать вкладку",
+    ["Choose..."] = "Выбрать...",
+    ["Restore"] = "Вернуть",
+    ["Type to filter..."] = "Введите для фильтра...",
+    ["  nothing to put away"] = "  нечего убирать",
+    ["Search anything..."] = "Искать что угодно...",
+    ["Search elements..."] = "Искать элементы...",
+    ["  Nothing found"] = "  Ничего не найдено",
+    ["top tab (all its tabs)"] = "верхняя вкладка (все её вкладки)",
+    ["Reconnects you to this server"] = "Переподключает вас к этому серверу",
+    ["Joins another public server"] = "Заходит на другой публичный сервер",
+    ["Decorative bubbles on buttons and tabs"] = "Декоративные пузыри на кнопках и вкладках",
+    ["Flat look without bubbles"] = "Плоский вид без пузырей",
+    ["A place for functions and tabs you do not like: pick them from the lists in this tab, or drag them onto it (functions with Left Shift held)."] = "Место для функций и вкладок, которые вам не нравятся: выберите их из списков в этой вкладке или перетащите на неё (функции с зажатым левым Shift).",
+    ["Background color of the menu window."] = "Цвет фона окна меню.",
+    ["Click the button, then press the key that should open and close the menu. Escape or Backspace clears it."] = "Нажмите на кнопку, затем на клавишу, которая будет открывать и закрывать меню. Escape или Backspace очищают клавишу.",
+    ["Color of most of the text in the menu."] = "Цвет большей части текста в меню.",
+    ["Color of the cursor (not used while Rainbow is on)."] = "Цвет курсора (не используется при включённой радуге).",
+    ["Color of the scrollbars."] = "Цвет полос прокрутки.",
+    ["Color of the side panel."] = "Цвет боковой панели.",
+    ["Color of the top bar and other secondary panels."] = "Цвет верхней панели и других второстепенных панелей.",
+    ["Colors, transparency, rainbow and text sizes of the menu."] = "Цвета, прозрачность, радуга и размеры текста меню.",
+    ["Everything you changed in the menu. Press Revert next to an entry to undo it."] = "Всё, что вы изменили в меню. Нажмите Revert рядом с записью, чтобы отменить.",
+    ["How fast the rainbow colors change."] = "Как быстро меняются цвета радуги.",
+    ["How fast the rainbow colors of the cursor change."] = "Как быстро меняются цвета радуги у курсора.",
+    ["Information about you, your character, this game and server, and your device."] = "Информация о вас, вашем персонаже, этой игре и сервере, и вашем устройстве.",
+    ["Leaves this server and joins another public server of this game that is not full."] = "Покидает этот сервер и заходит на другой публичный сервер этой игры, где есть место.",
+    ["Length of the cross lines."] = "Длина линий креста.",
+    ["Makes the cursor cycle through all colors."] = "Курсор плавно проходит через все цвета.",
+    ["Makes the cursor ring and cross rotate."] = "Кольцо и крест курсора вращаются.",
+    ["Makes the main menu color cycle through all colors."] = "Главный цвет меню плавно проходит через все цвета.",
+    ["Makes the whole menu bigger or smaller, on top of the automatic scale for your screen."] = "Делает всё меню больше или меньше поверх автоматического масштаба под ваш экран.",
+    ["Menu hotkey, size, window behavior, rejoin, server hop, stats window, hints, moving functions and sound."] = "Горячая клавиша меню, размер, поведение окна, перезаход, смена сервера, окно статистики, подсказки, перемещение функций и звук.",
+    ["On: hold Left Shift and drag a function to move it, or drop it on a tab. Off: nothing can be moved."] = "Вкл: зажмите левый Shift и перетащите функцию, чтобы переместить её или бросить на вкладку. Выкл: ничего нельзя перемещать.",
+    ["On: resting the mouse on a tab or function shows what it does. Off: all hints are hidden."] = "Вкл: если задержать мышь на вкладке или функции, покажется, что она делает. Выкл: все подсказки скрыты.",
+    ["On: the menu can be dragged partly outside the screen. Off: it always stays fully inside."] = "Вкл: меню можно частично вытаскивать за экран. Выкл: оно всегда остаётся целиком на экране.",
+    ["Rejoins this game: the same server if other players are in it, otherwise a fresh server."] = "Перезаходит в эту игру: на тот же сервер, если на нём есть другие игроки, иначе на новый.",
+    ["Rotation speed of the cursor, in degrees per second."] = "Скорость вращения курсора в градусах в секунду.",
+    ["Settings of the custom cursor that is shown over the menu."] = "Настройки своего курсора, который показывается над меню.",
+    ["Shows FPS, ping, time and session time in the top-left corner."] = "Показывает FPS, пинг, время и время сессии в левом верхнем углу.",
+    ["Shows the custom cursor while the mouse is over the menu."] = "Показывает свой курсор, пока мышь над меню.",
+    ["Size of the dot in the middle."] = "Размер точки в середине.",
+    ["Size of the ring around the cursor."] = "Размер кольца вокруг курсора.",
+    ["Size of the soft glow behind the cursor."] = "Размер мягкого свечения за курсором.",
+    ["Text size inside color pickers."] = "Размер текста внутри палитр цвета.",
+    ["Text size of all other labels."] = "Размер текста всех остальных надписей.",
+    ["Text size of copy / save buttons."] = "Размер текста кнопок копирования и сохранения.",
+    ["Text size of regular buttons."] = "Размер текста обычных кнопок.",
+    ["Text size of slider names and values."] = "Размер текста названий и значений слайдеров.",
+    ["Text size of text boxes."] = "Размер текста в полях ввода.",
+    ["Text size of the side tabs."] = "Размер текста боковых вкладок.",
+    ["Text size of the top tabs."] = "Размер текста верхних вкладок.",
+    ["The main color of the menu: buttons, tabs, borders and effects."] = "Главный цвет меню: кнопки, вкладки, рамки и эффекты.",
+    ["Transparency of the glow (right = more see-through)."] = "Прозрачность свечения (вправо = прозрачнее).",
+    ["Transparency of the ring (right = more see-through)."] = "Прозрачность кольца (вправо = прозрачнее).",
+    ["Transparency of the side panel."] = "Прозрачность боковой панели.",
+    ["Transparency of the top bar."] = "Прозрачность верхней панели.",
+    ["Transparency of the window background (right = more see-through)."] = "Прозрачность фона окна (вправо = прозрачнее).",
+    ["Turns on the decorative bubbles on buttons and tabs."] = "Включает декоративные пузыри на кнопках и вкладках.",
+    ["Turns the bubbles off for a flat, solid look."] = "Выключает пузыри для плоского сплошного вида.",
+    ["Turns the menu sounds on or off."] = "Включает и выключает звуки меню.",
+    ["Volume of the menu sounds."] = "Громкость звуков меню.",
+    ["Which free server Server Hop picks: a random one, the emptiest or the fullest."] = "Какой свободный сервер выберет «Сменить сервер»: случайный, самый пустой или самый полный.",
+    ["A place for functions and tabs you do not like: drag a function (hold Left Shift) or a tab button onto this tab to put it away."] = "Место для функций и вкладок, которые вам не нравятся: перетащите функцию (с зажатым левым Shift) или кнопку вкладки на эту вкладку.",
+    ["Use the two rows below to pick what to put away: any function or any tab of the whole menu. You can also hold Left Shift and drag a function (or drag a tab's button) onto the Trash tab. To take something out, drag a function onto any other tab, or press Restore on a tab's banner."] = "Две строки ниже позволяют выбрать, что убрать: любую функцию или любую вкладку всего меню. Ещё можно зажать левый Shift и перетащить функцию (или кнопку вкладки) на вкладку «Корзина». Чтобы достать что-то обратно, перетащите функцию на любую другую вкладку или нажмите «Вернуть» на плашке вкладки.",
+    ["Show console messages: errors and notes of the menu are printed to the F9 console. Off = the console stays quiet."] = "Показывать сообщения в консоли: ошибки и заметки меню выводятся в консоль F9. Выкл = консоль молчит.",
+    ["Language of all the texts of the menu."] = "Язык всех надписей меню.",
+    ["Clear"] = "Очистить",
+    ["Join our Discord!"] = "Заходите в наш Discord!",
+    ["Join"] = "Войти",
+    ["Clipboard is not available here"] = "Буфер обмена здесь недоступен",
+    ["No other free server was found"] = "Другой свободный сервер не найден",
+})
 
 -- ── Info tab (player + game + device information) ──────────────────────
 -- Player: avatar headshot, display name, username, user ID, account creation date and age.
@@ -438,6 +733,19 @@ safe("Settings tab", function()
         if not on and Nav.hideMoveCovers then Nav.hideMoveCovers() end
     end })
 
+    Settings:AddSection("Language")
+    -- the language of all the texts of the menu (see "Language" above): English or Russian
+    Settings:AddDropdown({ Text = "Language", Default = (Nav.language == "ru") and 2 or 1,
+        Options = { "English", "Русский" },
+        Callback = function(i) Nav.setLanguage(i == 2 and "ru" or "en") end })
+
+    Settings:AddSection("Console")
+    -- off (the default): the menu writes nothing to the F9 console. on: errors and notes of the menu are printed there
+    Settings:AddToggle({ Text = "Console Output (F9)", Default = verbose(), Callback = function(on)
+        _G.DyserVerbose = on and true or false
+        pcall(function() getgenv().DyserVerbose = on and true or false end)
+    end })
+
     Settings:AddSection("Overlay")
     -- small window in the top-left corner: FPS, ping, time, session
     Settings:AddToggle({ Text = "Stats Window", Callback = function(on) Nav.setStats(on) end })
@@ -601,7 +909,7 @@ safe("Slider typing", function()
     local function countNamed(name)
         local n = 0
         for _, d in ipairs(win:GetDescendants()) do
-            if d.Name == "Label" and d:IsA("TextLabel") and d.Text == name and d.Parent:FindFirstChild("NumberInput") then n = n + 1 end
+            if d.Name == "Label" and d:IsA("TextLabel") and Nav.textOf(d) == name and d.Parent:FindFirstChild("NumberInput") then n = n + 1 end
         end
         return n
     end
@@ -647,7 +955,7 @@ safe("Slider typing", function()
             box.Text = ""; box.BackgroundTransparency = 1; outline.Transparency = 1
             valueLabel.TextTransparency = 0
             if not n then return end
-            local name = nameLabel.Text
+            local name = Nav.textOf(nameLabel)   -- the English name the library knows the slider by
             if countNamed(name) > 1 then warn("[Dyser] Slider typing: more than one slider is named '" .. name .. "'; rename one."); return end
             local before = fill.Size.X.Scale
             Dyser:SetSlider(name, math.clamp(n / top, 0, 1))   -- moves the slider, updates the number, runs the Callback
@@ -809,14 +1117,28 @@ safe("Button style", function()
         end)
 
         -- the text on the left: a small accent bar and what the button does
+        local descLabel
         local row = btn.Parent
         if description and row then
             local bar = Instance.new("Frame", row)
             bar.AnchorPoint = Vector2.new(0, 0.5); bar.Position = UDim2.new(0, 6, 0.5, 0); bar.Size = UDim2.fromOffset(3, 12)
             bar.BorderSizePixel = 0; corner(bar, 2); Track.BG(bar)
-            label(row, "TextLabel", { Position = UDim2.fromOffset(16, 0), Size = UDim2.new(1, -(16 + width + 14), 1, 0),
+            descLabel = label(row, "TextLabel", { Position = UDim2.fromOffset(16, 0), Size = UDim2.new(1, -(16 + width + 14), 1, 0),
                 Text = description, TextSize = 13, Font = FONTS.default, TextColor3 = COLORS.text,
                 TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd, Category = "Labels" })
+        end
+
+        -- the text of the button may change (language): the pill gets as wide as the new text needs
+        if name then
+            name:GetPropertyChangedSignal("Text"):Connect(function()
+                local ok, size = pcall(function()
+                    return TextService:GetTextSize(name.Text, name.TextSize, name.Font, Vector2.new(10000, 10000))
+                end)
+                if not ok then return end
+                local w = math.clamp(size.X + 26, 62, 170)
+                btn.Size = UDim2.fromOffset(w, 18)
+                if descLabel then descLabel.Size = UDim2.new(1, -(16 + w + 14), 1, 0) end
+            end)
         end
     end
     Nav.styleSmallButton = function(btn, description) if isLibraryButton(btn) then style(btn, description) end end
@@ -826,7 +1148,7 @@ safe("Button style", function()
             task.defer(function()   -- wait until the library has finished drawing the button
                 if isLibraryButton(d) then
                     local name = d:FindFirstChildWhichIsA("TextLabel")
-                    style(d, name and BUTTON_INFO[name.Text])
+                    style(d, name and BUTTON_INFO[Nav.textOf(name)])
                 end
             end)
         end
@@ -1363,11 +1685,11 @@ safe("Trash tab", function()
         popup.Parent = window
         filter:CaptureFocus()
 
-        watcher = RunService.Heartbeat:Connect(function()   -- closes when the Trash tab or the menu is no longer on the screen
+        watcher = gconnect(RunService.Heartbeat, function()   -- closes when the Trash tab or the menu is no longer on the screen
             if not (page.Visible and window.Visible and screenGui.Enabled) then closePicker() end
         end)
     end
-    UserInputService.InputBegan:Connect(function(input)
+    gconnect(UserInputService.InputBegan, function(input)
         if not popup then return end
         if input.KeyCode == Enum.KeyCode.Escape then closePicker()
         elseif input.UserInputType == Enum.UserInputType.MouseButton1 and not overPopup then
@@ -1405,14 +1727,14 @@ safe("Trash tab", function()
             local top = panel.Name:sub(1, -11)
             local label = btn:FindFirstChildWhichIsA("TextLabel")
             local pane = window:FindFirstChild(top .. "_LeftPane", true)
-            local pg = label and pane and pane:FindFirstChild(label.Text .. "Page")
+            local pg = label and pane and pane:FindFirstChild(Nav.textOf(label) .. "Page")
             if not pg then return end
             local wasOpen = pg.Visible
             pack(label.Text .. "  ·  from " .. top, { pg }, { btn })
             if wasOpen and Nav.selectSideTab then   -- open another tab of the same top tab instead
                 for _, b in ipairs(panel:GetChildren()) do
                     local l2 = b:IsA("TextButton") and b.Visible and b ~= btn and b:FindFirstChildWhichIsA("TextLabel")
-                    if l2 then Nav.selectSideTab(top, l2.Text); break end
+                    if l2 then Nav.selectSideTab(top, Nav.textOf(l2)); break end
                 end
             end
         else
@@ -1551,7 +1873,7 @@ safe("Draggable tabs", function()
                 end
             end
 
-            conn = RunService.RenderStepped:Connect(function()
+            conn = gconnect(RunService.RenderStepped, function()
                 local ok, err = pcall(step)
                 if not ok then warn("[Dyser] tab drag stopped: " .. tostring(err)); finish() end
             end)
@@ -1636,7 +1958,7 @@ safe("Movable functions", function()
                 local pane = window:FindFirstChild(d.Name:sub(1, -11) .. "_LeftPane", true)
                 for _, b in ipairs(d:GetChildren()) do
                     local t = b:IsA("TextButton") and b:FindFirstChildWhichIsA("TextLabel")
-                    local pg = t and pane and pane:FindFirstChild(t.Text .. "Page")
+                    local pg = t and pane and pane:FindFirstChild(Nav.textOf(t) .. "Page")
                     if pg then table.insert(list, { button = b, page = pg, name = t.Text }) end
                 end
             end
@@ -1785,7 +2107,7 @@ safe("Movable functions", function()
             end
         end
 
-        conn = RunService.RenderStepped:Connect(function()
+        conn = gconnect(RunService.RenderStepped, function()
             local ok, err = pcall(step)
             if not ok then warn("[Dyser] function drag stopped: " .. tostring(err)); finish() end
         end)
@@ -1821,10 +2143,10 @@ safe("Movable functions", function()
             end
         end
     end
-    UserInputService.InputBegan:Connect(function(input)
+    gconnect(UserInputService.InputBegan, function(input)
         if input.KeyCode == Enum.KeyCode.LeftShift and screenGui.Enabled then showCovers() end
     end)
-    UserInputService.InputEnded:Connect(function(input)
+    gconnect(UserInputService.InputEnded, function(input)
         if input.KeyCode == Enum.KeyCode.LeftShift then hideCovers() end
     end)
 
@@ -1899,6 +2221,8 @@ safe("Hints", function()
         ["Hop To"] = "Which free server Server Hop picks: a random one, the emptiest or the fullest.",
         ["Server Hop"] = "Leaves this server and joins another public server of this game that is not full.",
         ["Move Functions"] = "On: hold Left Shift and drag a function to move it, or drop it on a tab. Off: nothing can be moved.",
+        ["Language"] = "Language of all the texts of the menu.",
+        ["Console Output (F9)"] = "Show console messages: errors and notes of the menu are printed to the F9 console. Off = the console stays quiet.",
         ["Show Hints"] = "On: resting the mouse on a tab or function shows what it does. Off: all hints are hidden.",
         ["Sound Enabled"] = "Turns the menu sounds on or off.",
         ["Volume"] = "Volume of the menu sounds.",
@@ -1923,9 +2247,9 @@ safe("Hints", function()
     end
     local function firstText(inst)
         local l = inst:FindFirstChild("Label")
-        if l and l:IsA("TextLabel") and l.Text ~= "" then return l.Text end
+        if l and l:IsA("TextLabel") and l.Text ~= "" then return Nav.textOf(l) end
         for _, d in ipairs(inst:GetDescendants()) do
-            if d:IsA("TextLabel") and d.Text ~= "" then return d.Text end
+            if d:IsA("TextLabel") and d.Text ~= "" then return Nav.textOf(d) end
         end
     end
 
@@ -1955,7 +2279,7 @@ safe("Hints", function()
         end
     end
     Nav.setHint = function(name, text) HINTS[name] = text end
-    Nav.getHint = function(name) return HINTS[name] end   -- used by the search
+    Nav.getHint = function(name) local h = HINTS[name]; return h and (Nav.tr and Nav.tr(h) or h) or nil end   -- used by the search
     Nav.applyHints = apply
     apply()
 end)
@@ -2058,7 +2382,7 @@ safe("Search", function()
             e.nameT = tokens(e.name)
             e.extraT = tokens(e.extra or "")
             e.locT = tokens(e.loc)
-            e.hintT = tokens((Nav.getHint and Nav.getHint(e.name)) or "")
+            e.hintT = tokens((Nav.getHint and Nav.getHint(Nav.en(e.name))) or "")
             list[#list + 1] = e
         end
         local function topButton(name)
@@ -2068,7 +2392,7 @@ safe("Search", function()
             local panel = window:FindFirstChild(top .. "_SidePanel", true)
             for _, b in ipairs(panel and panel:GetChildren() or {}) do
                 local t = b:IsA("TextButton") and b:FindFirstChildWhichIsA("TextLabel")
-                if t and t.Text == sideName then return b end
+                if t and Nav.textOf(t) == sideName then return b end
             end
         end
         local function rightButton(name)
@@ -2087,7 +2411,7 @@ safe("Search", function()
                 local top = d.Name:sub(1, -11)
                 for _, b in ipairs(d:GetChildren()) do
                     local t = b:IsA("TextButton") and b:FindFirstChildWhichIsA("TextLabel")
-                    if t and b.Visible then add({ name = t.Text, loc = top, kind = "tab", dest = { kind = "side", top = topButton(top), side = b, topName = top, sideName = t.Text } }) end
+                    if t and b.Visible then add({ name = t.Text, loc = top, kind = "tab", dest = { kind = "side", top = topButton(top), side = b, topName = top, sideName = Nav.textOf(t) } }) end
                 end
             end
         end
@@ -2273,12 +2597,12 @@ safe("Search", function()
         local chosen
         for _, b in ipairs(panel:GetChildren()) do
             local t = b:IsA("TextButton") and b:FindFirstChildWhichIsA("TextLabel")
-            local page = t and pane:FindFirstChild(t.Text .. "Page")
+            local page = t and pane:FindFirstChild(Nav.textOf(t) .. "Page")
             if page then
                 local strokes = {}   -- the button has two outlines: the plain one, then the accent one for the selected state
                 for _, c in ipairs(b:GetChildren()) do if c:IsA("UIStroke") then strokes[#strokes + 1] = c end end
                 local active = strokes[2]
-                if t.Text == sideName then
+                if Nav.textOf(t) == sideName then
                     chosen = { button = b, page = page, label = t }
                     TweenService:Create(b, TweenInfo.new(.15), { BackgroundColor3 = COLORS.accent }):Play()
                     if active then TweenService:Create(active, TweenInfo.new(.15), { Transparency = 0 }):Play() end
@@ -2435,7 +2759,7 @@ safe("Search", function()
     end)
     clear.MouseButton1Click:Connect(function() playsfx("click"); box.Text = ""; closeResults() end)
 
-    UserInputService.InputBegan:Connect(function(input)
+    gconnect(UserInputService.InputBegan, function(input)
         if not box:IsFocused() or not panel.Visible then return end
         if input.KeyCode == Enum.KeyCode.Down and #results > 0 then selected = math.min(#results, selected + 1); render(lastTotal)
         elseif input.KeyCode == Enum.KeyCode.Up and #results > 0 then selected = math.max(1, selected - 1); render(lastTotal)
