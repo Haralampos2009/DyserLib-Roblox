@@ -107,21 +107,6 @@ local function safe(name, fn)
     if not ok then warn("[Dyser] " .. name .. " failed: " .. tostring(err)) end
 end
 
--- ── Title bar: no minimize button ──────────────────────────────────────
--- The small "-" button next to the close button is removed. (The menu can still be closed with the x or its hotkey.)
-safe("Remove minimize button", function()
-    local window = screenGui:FindFirstChild("MenuWindow")
-    if not window then return end
-    for _, d in ipairs(window:GetDescendants()) do
-        if d:IsA("TextButton") and (d.Text == "-" or d.Text == "□") and d.AnchorPoint == Vector2.new(1, 0)
-            and d.Size.X.Scale == 0 and d.Size.X.Offset == d.Size.Y.Offset and d.Size.X.Offset <= 30
-            and d.Position.Y.Scale == 0 and d.Position.Y.Offset <= 10 then
-            d:Destroy()
-            break
-        end
-    end
-end)
-
 -- ── Hint system ────────────────────────────────────────────────────────
 -- A small box that appears when the mouse rests on a tab or function for a moment. It is built here (instead of using
 -- the library's addTT) so that Settings > Hints > Show Hints can switch every hint of this module on and off.
