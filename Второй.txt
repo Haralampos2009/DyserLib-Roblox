@@ -95,6 +95,41 @@ local UI = Dyser.UI
 local label, corner, stroke = UI.label, UI.corner, UI.stroke
 local bindCursorHover, addTT, playsfx = UI.bindCursorHover, UI.addTT, UI.playsfx
 local Acc, COLORS, FONTS, RS, Nav = UI.Acc, UI.COLORS, UI.FONTS, UI.RS, UI.Nav
+
+-- ── Registry of controls ───────────────────────────────────────────────
+-- Dropdowns, text boxes and key rebinds of the tab API cannot be read back or set from outside, so every one that is created
+-- (here, or by the third module) is written down with the function that applies its value: Nav.controls = { { kind, name,
+-- options, default, apply }, ... }. The third module uses it to copy the whole menu into a preset link and to load one.
+local controls = {}
+Nav.controls = controls
+local function wrapTab(tab)
+    if type(tab) ~= "table" or rawget(tab, "DyserWrapped") then return tab end
+    rawset(tab, "DyserWrapped", true)
+    for _, method in ipairs({ "AddDropdown", "AddInput", "AddRebind" }) do
+        local original = tab[method]
+        if type(original) == "function" then
+            tab[method] = function(self, opts, ...)
+                opts = opts or {}
+                local callback = opts.Callback
+                opts.Callback = function(...) if callback then return callback(...) end end   -- the same function, kept
+                controls[#controls + 1] = { kind = method, name = opts.Text, options = opts.Options, default = opts.Default, apply = opts.Callback }
+                return original(self, opts, ...)
+            end
+        end
+    end
+    return tab
+end
+local rawAddRightTab, rawAddTopTab = Window.AddRightTab, Window.AddTopTab
+Window.AddRightTab = function(self, ...) return wrapTab(rawAddRightTab(self, ...)) end
+Window.AddTopTab = function(self, ...)
+    local top = rawAddTopTab(self, ...)
+    if type(top) == "table" and top.AddSideTab and not rawget(top, "DyserWrapped") then
+        rawset(top, "DyserWrapped", true)
+        local rawAddSideTab = top.AddSideTab
+        top.AddSideTab = function(s, ...) return wrapTab(rawAddSideTab(s, ...)) end
+    end
+    return top
+end
 local screenGui, uiScale = UI.screenGui, UI.uiScale
 local Track, gradient = UI.Track, UI.gradient
 local TweenService = game:GetService("TweenService")
