@@ -1272,6 +1272,7 @@ safe("Smooth sections", function()
 
     Nav.expandSection = function(header, instant) setCollapsed(header, false, instant) end
     Nav.collapseSection = function(header, instant) setCollapsed(header, true, instant) end
+    Nav.sectionCollapsed = function(header) local st = states[header]; return st ~= nil and st.collapsed == true end
 
     -- a section header is a plain frame with a label, two lines and a small square "^" button
     local function attach(header)
@@ -1437,6 +1438,24 @@ safe("Smooth panels", function()
         return false
     end, function() return not rightPane.Visible end)
 
+    -- the state of the two panels and a way to fold / open them from code (used by the preset link of the third module)
+    Nav.panelsFolded = function() return { left = visibleLeftPane() == nil, right = not rightPane.Visible } end
+    Nav.foldPanel = function(which, fold)
+        if which == "left" then
+            local pane = visibleLeftPane()
+            if fold and pane then
+                roll(pane, true)
+                if divider then TweenService:Create(divider, TweenInfo.new(TIME), { BackgroundTransparency = 1 }):Play() end
+            elseif not fold and not pane then
+                roll(paneOfSelectedTab(), false)
+                if divider then TweenService:Create(divider, TweenInfo.new(TIME), { BackgroundTransparency = 0 }):Play() end
+            end
+        else
+            if fold and rightPane.Visible then roll(rightPane, true)
+            elseif not fold and not rightPane.Visible then roll(rightPane, false) end
+        end
+    end
+
     -- dropdown arrows: the library switches a small label between "v" and "^"; that label is hidden and a copy of the "v"
     -- turns instead
     local function attachDropdownArrow(lbl)
@@ -1506,7 +1525,9 @@ safe("Trash tab", function()
     local function normalizePage(pg) for i, c in ipairs(sortedChildren(pg)) do c.LayoutOrder = i end end
 
     -- everything on the given pages goes to the Trash under a banner; the tab buttons are hidden; "Restore" undoes it
-    local function pack(title, pages, buttons)
+    local packages = {}   -- the tabs that are in the Trash as tabs: { title, kind, name, top, items, buttons, banner, restore }
+    Nav.trashPackages = packages
+    local function pack(title, pages, buttons, kind, tabName, topName)
         local items = {}
         for _, pg in ipairs(pages) do
             normalizePage(pg)
@@ -1536,8 +1557,8 @@ safe("Trash tab", function()
         end
         for _, b in ipairs(buttons) do b.Visible = false end
 
-        restore.MouseButton1Click:Connect(function()
-            playsfx("click")
+        local package = { title = title, kind = kind, name = tabName, top = topName, items = items, buttons = buttons, banner = banner }
+        local function restorePackage()
             for _, it in ipairs(items) do
                 if it.obj.Parent == page then   -- things you already took out by hand stay where you put them
                     it.obj.LayoutOrder = it.order
@@ -1547,9 +1568,21 @@ safe("Trash tab", function()
             end
             for _, b in ipairs(buttons) do b.Visible = true end
             banner:Destroy()
+            for i, other in ipairs(packages) do
+                if other == package then table.remove(packages, i); break end
+            end
+        end
+        package.restore = restorePackage
+        packages[#packages + 1] = package
+        restore.MouseButton1Click:Connect(function()
+            playsfx("click")
+            restorePackage()
             AddLog('Restored "' .. title .. '"', COLORS.accent)
         end)
         AddLog('Put "' .. title .. '" in the Trash', COLORS.accent)
+    end
+    Nav.restoreAllTrash = function()   -- every tab in the Trash goes back (used when a preset is loaded)
+        for i = #packages, 1, -1 do pcall(packages[i].restore) end
     end
 
     -- ---------- the pick lists: put a function or a tab away without dragging ----------
@@ -1750,7 +1783,7 @@ safe("Trash tab", function()
             local pg = label and pane and pane:FindFirstChild(Nav.textOf(label) .. "Page")
             if not pg then return end
             local wasOpen = pg.Visible
-            pack(label.Text .. "  ·  from " .. top, { pg }, { btn })
+            pack(label.Text .. "  ·  from " .. top, { pg }, { btn }, "side", Nav.textOf(label), top)
             if wasOpen and Nav.selectSideTab then   -- open another tab of the same top tab instead
                 for _, b in ipairs(panel:GetChildren()) do
                     local l2 = b:IsA("TextButton") and b.Visible and b ~= btn and b:FindFirstChildWhichIsA("TextLabel")
@@ -1767,7 +1800,7 @@ safe("Trash tab", function()
                 if c:IsA("ScrollingFrame") and c.Name:sub(-4) == "Page" then pages[#pages + 1] = c end
             end
             local wasOpen = Nav.selectedTop == btn
-            pack(name .. "  ·  the whole tab", pages, { btn })
+            pack(name .. "  ·  the whole tab", pages, { btn }, "top", name)
             if wasOpen and Nav.selectTopTab then   -- open another top tab instead
                 for _, e in ipairs(Nav.topTabBtns) do
                     if e.button.Visible and e.button ~= btn then Nav.selectTopTab(e.name); break end
@@ -2653,6 +2686,7 @@ safe("Search", function()
 
     Nav.selectTopTab = selectTopTab     -- used by the Trash tab to open another tab when the open one is put away
     Nav.selectSideTab = selectSideTab
+    Nav.selectRightTab = selectRightTab
 
     local function goTo(e)
         task.spawn(function()
